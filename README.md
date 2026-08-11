@@ -101,6 +101,27 @@ python -m pytest
 
 ---
 
+## ☁️ Deploy ke Render.com
+
+Saat membuat **New Web Service** di Render.com, sesuaikan konfigurasi berikut:
+
+1. **Build Command:**
+   ```bash
+   pip install -r requirements.txt
+   ```
+2. **Start Command (KRUSIAL ⚠️):**
+   ```bash
+   uvicorn app.main:app --host 0.0.0.0 --port $PORT
+   ```
+3. **Environment Variables (Wajib Diisi):**
+   * `DASHBOARD_USERNAME`: `admin` (atau username pilihan Anda)
+   * `DASHBOARD_PASSWORD`: `password_rahasia_anda`
+   * `DATABASE_URL`: `sqlite+aiosqlite:///./live_peak.db`
+   * `PYTHON_VERSION`: `3.12.0` (opsional untuk versi Python Render)
+
+
+---
+
 ## 🏛️ Struktur Direktori Proyek
 
 ```text
