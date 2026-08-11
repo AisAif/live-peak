@@ -1,0 +1,35 @@
+# Python Bytecode & Cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual Environments
+.venv/
+venv/
+ENV/
+env/
+
+# Local Database Files
+*.db
+*.sqlite
+*.sqlite3
+live_peak.db
+
+# Environment Configuration (Keep .env.example)
+.env
+
+# Logs & Temporary Files
+*.log
+logs/
+tmp/
+scratch/
+
+# IDE & OS Files
+.vscode/
+.idea/
+*.swp
+*.DS_Store
+Thumbs.db
