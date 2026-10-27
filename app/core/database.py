@@ -1,3 +1,4 @@
+import os
 from typing import AsyncGenerator
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
@@ -14,6 +15,15 @@ class Base(DeclarativeBase):
     """Base declarative class for all SQLAlchemy ORM models."""
     pass
 
+
+# Ensure directory exists if using local SQLite with a path like ./data/live_peak.db
+if "sqlite" in settings.DATABASE_URL:
+    parts = settings.DATABASE_URL.split(":///")
+    if len(parts) > 1:
+        db_file_path = parts[1]
+        dir_name = os.path.dirname(db_file_path)
+        if dir_name:
+            os.makedirs(dir_name, exist_ok=True)
 
 # Create async engine for local SQLite or PostgreSQL
 engine: AsyncEngine = create_async_engine(

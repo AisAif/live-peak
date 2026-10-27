@@ -101,7 +101,61 @@ python -m pytest
 
 ---
 
-## ☁️ Deploy ke Render.com
+## 🐳 Deploy di VPS via Docker Compose & Cloudflare Tunnel
+
+Skema ini adalah cara **paling aman dan stabil** untuk menjalankan monitoring 24/7 tanpa perlu membuka port firewall (Zero Open Ports) dan menyembunyikan IP publik VPS Anda.
+
+### 1. Buat Cloudflare Tunnel di Dashboard Cloudflare
+1. Buka [Cloudflare Zero Trust Dashboard](https://one.dash.cloudflare.com/) > **Networks** > **Tunnels**.
+2. Klik **Add a Tunnel** > Pilih **Cloudflared**.
+3. Beri nama tunnel (misal `live-peak-vps`), lalu klik **Save tunnel**.
+4. Di bagian *Install and run a connector*, pilih tab **Docker**.
+5. Salin kode token panjang yang tertera setelah `--token` (misalnya: `eyJhIjoi...`).
+6. Masuk ke tab **Public Hostname**:
+   * **Subdomain**: misal `live` (atau domain utama Anda)
+   * **Domain**: domain aktif Anda di Cloudflare
+   * **Type**: `HTTP`
+   * **URL**: `live-peak-app:8000` *(menggunakan nama container internal Docker)*
+7. Klik **Save hostname**.
+
+---
+
+### 2. Setup di Server VPS
+Clone repositori dan persiapkan file environment:
+```bash
+# Clone repository
+git clone https://github.com/AisAif/live-peak.git
+cd live-peak
+
+# Salin template env
+cp .env.example .env
+```
+
+Edit file `.env` di VPS (`nano .env`):
+```env
+DASHBOARD_USERNAME=admin
+DASHBOARD_PASSWORD=password_rahasia_anda
+DATABASE_URL=sqlite+aiosqlite:///./data/live_peak.db
+TUNNEL_TOKEN=eyJhIjoi...token_cloudflare_anda...
+```
+
+---
+
+### 3. Jalankan Kontainer via Docker Compose
+```bash
+# Build dan jalankan di background
+docker compose up -d --build
+
+# Cek status kontainer
+docker compose ps
+
+# Cek log aplikasi & tunnel
+docker compose logs -f
+```
+
+Data SQLite akan tersimpan secara otomatis dan persisten di folder host `./data/` di VPS Anda.
+
+---
 
 Saat membuat **New Web Service** di Render.com, sesuaikan konfigurasi berikut:
 

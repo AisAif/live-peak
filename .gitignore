@@ -17,6 +17,7 @@ env/
 *.sqlite
 *.sqlite3
 live_peak.db
+data/
 
 # Environment Configuration (Keep .env.example)
 .env

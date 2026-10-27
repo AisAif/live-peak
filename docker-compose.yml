@@ -1,0 +1,32 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: live-peak-app
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    ports:
+      # Hanya diexpose ke loopback host VPS untuk debugging lokal/curl
+      - "127.0.0.1:8000:8000"
+    networks:
+      - live-peak-net
+
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    container_name: live-peak-tunnel
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN}
+    networks:
+      - live-peak-net
+    depends_on:
+      - app
+
+networks:
+  live-peak-net:
+    driver: bridge
