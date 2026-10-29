@@ -111,7 +111,11 @@ class AutoChannelTracker:
                                 f"🎥 Auto-detected LIVE stream for channel {ch['channel_name']} ({channel_id})! "
                                 f"Starting automatic tracking for video {video_id} ('{stream_info.title}')"
                             )
-                            await stream_manager.start_monitoring_stream(video_id)
+                            await stream_manager.start_monitoring_stream(
+                                video_id,
+                                channel_id=channel_id,
+                                title=stream_info.title
+                            )
             except Exception as e:
                 logger.error(f"Error in auto-tracker periodic check: {e}")
 

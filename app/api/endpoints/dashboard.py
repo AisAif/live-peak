@@ -222,12 +222,13 @@ HTML_DASHBOARD_CONTENT = """<!DOCTYPE html>
                         <th>Max Velocity</th>
                         <th>Total Chat</th>
                         <th>Keywords</th>
+                        <th>Video Timestamp</th>
                         <th>Clip Start</th>
                         <th>Clip End</th>
                     </tr>
                 </thead>
                 <tbody id="reports-table-body">
-                    <tr><td colspan="8" style="color: var(--text-muted);">Memuat data laporan...</td></tr>
+                    <tr><td colspan="9" style="color: var(--text-muted);">Memuat data laporan...</td></tr>
                 </tbody>
             </table>
         </div>
@@ -371,12 +372,15 @@ HTML_DASHBOARD_CONTENT = """<!DOCTYPE html>
             tbody.innerHTML = '';
 
             if (data.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="8" style="color: var(--text-muted);">Belum ada laporan peak tercatat di database.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="9" style="color: var(--text-muted);">Belum ada laporan peak tercatat di database.</td></tr>';
                 return;
             }
 
             data.forEach(p => {
                 const tr = document.createElement('tr');
+                const videoTs = (p.video_start_time && p.video_end_time) 
+                    ? `<span class="badge" style="background: rgba(56, 189, 248, 0.2); color: #38bdf8;">${p.video_start_time} - ${p.video_end_time}</span>` 
+                    : '-';
                 tr.innerHTML = `
                     <td>#${p.id || '-'}</td>
                     <td><code>${p.video_id}</code></td>
@@ -384,6 +388,7 @@ HTML_DASHBOARD_CONTENT = """<!DOCTYPE html>
                     <td>${p.max_chat_velocity.toFixed(1)} msg/s</td>
                     <td>${p.total_messages}</td>
                     <td>${p.highlight_keywords.join(', ') || '-'}</td>
+                    <td><strong>${videoTs}</strong></td>
                     <td>${new Date(p.padded_start_time).toLocaleTimeString()}</td>
                     <td>${new Date(p.padded_end_time).toLocaleTimeString()}</td>
                 `;

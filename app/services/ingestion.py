@@ -47,6 +47,7 @@ class ChatIngestionService:
                     for item in chat.get().sync_items():
                         chat_msg = ChatMessage(
                             video_id=self.video_id,
+                            message_id=getattr(item, "id", None),
                             author_name=item.author.name,
                             message=item.message,
                             timestamp=datetime.now(timezone.utc),

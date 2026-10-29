@@ -10,6 +10,7 @@ def get_utc_now() -> datetime:
 class ChatMessage(BaseModel):
     """Represents a single chat message received from YouTube live chat."""
     video_id: str
+    message_id: str | None = None
     author_name: str
     message: str
     timestamp: datetime = Field(default_factory=get_utc_now)
@@ -26,6 +27,10 @@ class WindowStats(BaseModel):
     emoji_count: int = 0
     top_keywords: list[str] = Field(default_factory=list)
     z_score: float = 0.0
+    ewma_velocity: float = 0.0
+    ewma_z_score: float = 0.0
+    cusum_score: float = 0.0
+    peak_source: str | None = None
     is_peak: bool = False
 
 
@@ -38,6 +43,10 @@ class PeakEvent(BaseModel):
     end_time: datetime
     padded_start_time: datetime
     padded_end_time: datetime
+    video_start_time: str | None = None
+    video_end_time: str | None = None
+    start_offset_seconds: float | None = None
+    end_offset_seconds: float | None = None
     max_z_score: float
     max_chat_velocity: float
     total_messages: int

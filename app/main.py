@@ -8,6 +8,7 @@ from app.api.router import main_router
 
 
 from app.services.auto_tracker import auto_tracker
+from app.services.retention import retention_service
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -29,10 +30,14 @@ async def lifespan(app: FastAPI):
     
     # 3. Start Auto Channel Tracker Service
     await auto_tracker.start()
-    
+
+    # 4. Start Data Retention & Rollup worker
+    await retention_service.start()
+
     yield
     
     # Shut-down cleanup
+    await retention_service.stop()
     await auto_tracker.stop()
     logger.info(f"Shutting down {settings.PROJECT_NAME}...")
 

@@ -29,6 +29,10 @@ async def websocket_live_analytics(websocket: WebSocket, video_id: str):
                     "emoji_count": latest_stats.emoji_count,
                     "top_keywords": latest_stats.top_keywords,
                     "z_score": latest_stats.z_score,
+                    "ewma_velocity": latest_stats.ewma_velocity,
+                    "ewma_z_score": latest_stats.ewma_z_score,
+                    "cusum_score": latest_stats.cusum_score,
+                    "peak_source": latest_stats.peak_source,
                     "is_peak": latest_stats.is_peak
                 }
                 await websocket.send_json(data)

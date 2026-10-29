@@ -1,4 +1,5 @@
 import httpx
+from app.core.config import settings
 from app.core.logger import logger
 from app.models.domain import PeakEvent
 
@@ -18,6 +19,21 @@ class NotificationService:
         if not target_url:
             return False
 
+        fields = [
+            {"name": "Total Chat Messages", "value": str(peak.total_messages), "inline": True},
+            {"name": "Peak Keywords", "value": ", ".join(peak.highlight_keywords) or "N/A", "inline": True},
+        ]
+        if peak.video_start_time and peak.video_end_time:
+            fields.append({
+                "name": "Video Timestamp",
+                "value": f"`{peak.video_start_time}` - `{peak.video_end_time}`",
+                "inline": False
+            })
+        fields.extend([
+            {"name": "Clip Start (Jam Asli)", "value": peak.padded_start_time.isoformat(), "inline": True},
+            {"name": "Clip End (Jam Asli)", "value": peak.padded_end_time.isoformat(), "inline": True},
+        ])
+
         # Format payload for generic Webhook or Discord
         payload = {
             "content": f"🚨 **HIGHLIGHT DETECTED!** (Video ID: `{peak.video_id}`)",
@@ -25,12 +41,7 @@ class NotificationService:
                 {
                     "title": f"Peak Z-Score: {peak.max_z_score:.2f} 🚀",
                     "description": f"Peak Chat Velocity: **{peak.max_chat_velocity:.2f} msg/s**",
-                    "fields": [
-                        {"name": "Total Chat Messages", "value": str(peak.total_messages), "inline": True},
-                        {"name": "Peak Keywords", "value": ", ".join(peak.highlight_keywords) or "N/A", "inline": True},
-                        {"name": "Video Clip Start", "value": peak.padded_start_time.isoformat(), "inline": False},
-                        {"name": "Video Clip End", "value": peak.padded_end_time.isoformat(), "inline": False},
-                    ],
+                    "fields": fields,
                     "color": 15158332  # Red color embed
                 }
             ]
@@ -50,4 +61,4 @@ class NotificationService:
                 return False
 
 
-notification_service = NotificationService()
+notification_service = NotificationService(webhook_url=settings.WEBHOOK_URL or None)

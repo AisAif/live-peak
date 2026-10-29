@@ -68,11 +68,33 @@ DATABASE_URL="sqlite+aiosqlite:///./live_peak.db"
 
 # Peak Detection & Analytics Parameters
 Z_SCORE_THRESHOLD=2.5
+# "mad" = robust median/MAD (recommended), "std" = mean/standard deviation
+Z_SCORE_METHOD=mad
 WINDOW_DURATION_SECONDS=10
 SLIDING_WINDOW_SIZE=30
+# EWMA: gradual chat velocity shifts
+ENABLE_EWMA_DETECTION=True
+EWMA_ALPHA=0.2
+EWMA_Z_THRESHOLD=3.0
+# CUSUM: small but persistent increases
+ENABLE_CUSUM_DETECTION=True
+CUSUM_DRIFT_SIGMA=0.5
+CUSUM_THRESHOLD_SIGMA=5.0
+# Raw chat storage (opt-in; grows DB quickly)
+ENABLE_RAW_CHAT_STORAGE=False
+CHAT_MESSAGE_RETENTION_DAYS=7
+CHAT_FLUSH_BATCH_SIZE=500
+# Data retention & hourly rollup (0 = keep forever)
+ENABLE_DATA_RETENTION=True
+WINDOW_STATS_RETENTION_DAYS=30
+PEAK_EVENTS_RETENTION_DAYS=365
+RETENTION_CHECK_INTERVAL_HOURS=6
 PEAK_MERGE_GAP_SECONDS=30
 PEAK_PADDING_BEFORE_SECONDS=15
 PEAK_PADDING_AFTER_SECONDS=15
+
+# Peak Alert Webhook (Discord / Telegram / generic HTTP). Leave empty to disable
+WEBHOOK_URL=""
 ```
 
 ---

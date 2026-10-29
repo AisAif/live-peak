@@ -18,6 +18,10 @@ DEFAULT_STOPWORDS = {
 # In-memory dynamic stopwords cache
 ACTIVE_STOPWORDS: set[str] = set(DEFAULT_STOPWORDS)
 
+# Noise patterns commonly found in live chat messages
+URL_PATTERN = re.compile(r"https?://\S+|www\.\S+", re.IGNORECASE)
+MENTION_PATTERN = re.compile(r"@\w+")
+
 # Free open-source GitHub raw endpoints for comprehensive stopwords
 INDONESIAN_STOPWORDS_URL = "https://raw.githubusercontent.com/stopwords-iso/stopwords-id/master/stopwords-id.json"
 ENGLISH_STOPWORDS_URL = "https://raw.githubusercontent.com/stopwords-iso/stopwords-en/master/stopwords-en.json"
@@ -90,11 +94,17 @@ def extract_top_keywords(messages: list[str], top_n: int = 5) -> list[str]:
         emojis = extract_emojis(msg)
         words.extend(emojis)
 
-        # Clean non-alphanumeric except underscore
-        clean_text = re.sub(r"[^\w\s]", " ", msg).lower()
+        # Remove URLs, mentions, and punctuation before tokenizing
+        clean_text = URL_PATTERN.sub(" ", msg)
+        clean_text = MENTION_PATTERN.sub(" ", clean_text)
+        clean_text = re.sub(r"[^\w\s]|_", " ", clean_text).lower()
         tokens = clean_text.split()
         for token in tokens:
-            if len(token) > 2 and token not in ACTIVE_STOPWORDS:
+            if (
+                len(token) > 2
+                and not token.isdigit()
+                and token not in ACTIVE_STOPWORDS
+            ):
                 words.append(token)
 
     if not words:

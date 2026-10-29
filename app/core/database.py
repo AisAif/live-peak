@@ -42,11 +42,81 @@ async_session_factory = async_sessionmaker(
 )
 
 
+def _run_sqlite_migrations(conn) -> None:
+    """
+    Lightweight additive migrations for existing local SQLite databases.
+
+    SQLAlchemy's create_all() does not alter existing tables, so new columns and
+    unique indexes must be added explicitly to keep old databases compatible.
+    """
+    def table_columns(table_name: str) -> set[str]:
+        rows = conn.exec_driver_sql(f"PRAGMA table_info({table_name})").fetchall()
+        return {row[1] for row in rows}
+
+    if "ended_at" not in table_columns("streams"):
+        conn.exec_driver_sql("ALTER TABLE streams ADD COLUMN ended_at DATETIME")
+        logger.info("Migration: added streams.ended_at column.")
+
+    if "dedup_key" not in table_columns("peak_events"):
+        conn.exec_driver_sql("ALTER TABLE peak_events ADD COLUMN dedup_key VARCHAR(255)")
+        logger.info("Migration: added peak_events.dedup_key column.")
+
+    peak_columns = table_columns("peak_events")
+    peak_additions = {
+        "video_start_time": "VARCHAR(50)",
+        "video_end_time": "VARCHAR(50)",
+        "start_offset_seconds": "FLOAT",
+        "end_offset_seconds": "FLOAT",
+    }
+    for col_name, col_type in peak_additions.items():
+        if col_name not in peak_columns:
+            conn.exec_driver_sql(f"ALTER TABLE peak_events ADD COLUMN {col_name} {col_type}")
+            logger.info(f"Migration: added peak_events.{col_name} column.")
+
+    window_columns = table_columns("window_stats")
+    window_additions = {
+        "ewma_velocity": "FLOAT NOT NULL DEFAULT 0",
+        "ewma_z_score": "FLOAT NOT NULL DEFAULT 0",
+        "cusum_score": "FLOAT NOT NULL DEFAULT 0",
+        "peak_source": "VARCHAR(50)",
+    }
+    for column_name, column_type in window_additions.items():
+        if column_name not in window_columns:
+            conn.exec_driver_sql(
+                f"ALTER TABLE window_stats ADD COLUMN {column_name} {column_type}"
+            )
+            logger.info(f"Migration: added window_stats.{column_name} column.")
+
+    conn.exec_driver_sql(
+        "UPDATE peak_events SET dedup_key = 'legacy-' || id WHERE dedup_key IS NULL"
+    )
+
+    migrations = [
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_window_stats_video_start "
+        "ON window_stats(video_id, window_start)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_peak_events_dedup_key "
+        "ON peak_events(dedup_key)",
+        "CREATE INDEX IF NOT EXISTS ix_peak_events_created_at "
+        "ON peak_events(created_at)",
+        "CREATE INDEX IF NOT EXISTS ix_window_stats_video_end "
+        "ON window_stats(video_id, window_end)",
+        "CREATE INDEX IF NOT EXISTS ix_window_stats_window_end "
+        "ON window_stats(window_end)",
+    ]
+    for statement in migrations:
+        try:
+            conn.exec_driver_sql(statement)
+        except Exception as e:
+            logger.warning(f"Migration skipped ({statement}): {e}")
+
+
 async def init_db() -> None:
-    """Initialize database tables."""
+    """Initialize database tables and run additive SQLite migrations."""
     logger.info("Initializing database tables...")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        if engine.dialect.name == "sqlite":
+            await conn.run_sync(_run_sqlite_migrations)
     logger.info("Database tables initialized successfully.")
 
 

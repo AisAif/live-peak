@@ -14,14 +14,22 @@ async def discover_channel_stream(channel_id: str):
     """Discovers active live stream for a given YouTube Channel ID."""
     info = await discovery_service.discover_by_channel_id(channel_id)
     if not info:
-        raise HTTPException(status_code=44, detail="No active live stream found for this channel.")
+        raise HTTPException(status_code=404, detail="No active live stream found for this channel.")
     return info
 
 
 @router.post("/start/{video_id}")
-async def start_monitoring_stream(video_id: str):
+async def start_monitoring_stream(
+    video_id: str,
+    channel_id: str | None = None,
+    title: str | None = None
+):
     """Starts real-time chat monitoring pipeline for target YouTube video ID."""
-    started = await stream_manager.start_monitoring_stream(video_id)
+    started = await stream_manager.start_monitoring_stream(
+        video_id,
+        channel_id=channel_id,
+        title=title
+    )
     if not started:
         raise HTTPException(status_code=400, detail="Stream is already being monitored.")
     return {"status": "success", "message": f"Started monitoring stream {video_id}"}
