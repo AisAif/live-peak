@@ -141,6 +141,109 @@ HTML_DASHBOARD_CONTENT = """<!DOCTYPE html>
             background: rgba(16, 185, 129, 0.2);
             color: #34d399;
         }
+        /* Modal Styles */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0, 0, 0, 0.8);
+            z-index: 999;
+            align-items: center;
+            justify-content: center;
+            backdrop-filter: blur(4px);
+        }
+        .modal-overlay.active {
+            display: flex;
+        }
+        .modal-content {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            width: 90%;
+            max-width: 820px;
+            overflow: hidden;
+            box-shadow: 0 20px 25px -5px rgba(0,0,0,0.5);
+        }
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 14px 20px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .modal-header h3 {
+            margin: 0;
+            font-size: 16px;
+        }
+        .modal-close-btn {
+            background: transparent;
+            border: none;
+            font-size: 26px;
+            color: var(--text-muted);
+            cursor: pointer;
+            padding: 0 6px;
+            line-height: 1;
+        }
+        .modal-close-btn:hover {
+            color: #fff;
+        }
+        .video-container {
+            position: relative;
+            padding-bottom: 56.25%; /* 16:9 Aspect Ratio */
+            height: 0;
+            overflow: hidden;
+            background: #000;
+        }
+        .video-container iframe {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            border: 0;
+        }
+        .modal-footer {
+            padding: 12px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: #0b1120;
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+        /* Filter and Pagination Styles */
+        .filter-bar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin: 16px 0;
+            padding: 14px;
+            background: #0f172a;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            align-items: center;
+        }
+        .filter-bar input, .filter-bar select {
+            padding: 8px 12px;
+            font-size: 13px;
+            border-radius: 6px;
+            border: 1px solid var(--border-color);
+            background: #1e293b;
+            color: #fff;
+        }
+        .pagination-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 16px;
+            padding-top: 12px;
+            border-top: 1px solid var(--border-color);
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        .pagination-controls {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
     </style>
 </head>
 <body>
@@ -210,7 +313,27 @@ HTML_DASHBOARD_CONTENT = """<!DOCTYPE html>
         <div class="card">
             <div style="display: flex; justify-content: space-between; align-items: center;">
                 <h3>📑 Historical Peak Highlight Reports</h3>
-                <button onclick="loadPeakReports()">🔄 Refresh Reports</button>
+                <button onclick="loadPeakReports(1)">🔄 Refresh Reports</button>
+            </div>
+
+            <!-- FILTER BAR -->
+            <div class="filter-bar">
+                <input type="text" id="filter-video-id" placeholder="Cari Video ID..." style="width: 140px;">
+                <input type="number" id="filter-min-z" placeholder="Min Z-Score" step="0.5" style="width: 110px;">
+                <input type="number" id="filter-min-velocity" placeholder="Min Velocity (msg/s)" step="1" style="width: 150px;">
+                <input type="text" id="filter-keyword" placeholder="Cari Keyword..." style="width: 130px;">
+                <select id="filter-sort-by">
+                    <option value="created_at">Urutkan: Waktu Deteksi</option>
+                    <option value="max_z_score">Urutkan: Z-Score Tertinggi</option>
+                    <option value="max_chat_velocity">Urutkan: Chat Velocity</option>
+                    <option value="total_messages">Urutkan: Total Pesan</option>
+                </select>
+                <select id="filter-sort-order">
+                    <option value="desc">Menurun (Desc)</option>
+                    <option value="asc">Menaik (Asc)</option>
+                </select>
+                <button style="padding: 8px 14px;" onclick="applyPeakFilters()">🔍 Filter</button>
+                <button style="padding: 8px 14px; background: #334155;" onclick="resetPeakFilters()">↺ Reset</button>
             </div>
 
             <table>
@@ -225,12 +348,32 @@ HTML_DASHBOARD_CONTENT = """<!DOCTYPE html>
                         <th>Video Timestamp</th>
                         <th>Clip Start</th>
                         <th>Clip End</th>
+                        <th>Action</th>
                     </tr>
                 </thead>
                 <tbody id="reports-table-body">
-                    <tr><td colspan="9" style="color: var(--text-muted);">Memuat data laporan...</td></tr>
+                    <tr><td colspan="10" style="color: var(--text-muted);">Memuat data laporan...</td></tr>
                 </tbody>
             </table>
+
+            <!-- PAGINATION BAR -->
+            <div class="pagination-bar">
+                <div id="pagination-info" style="font-size: 13px; color: var(--text-muted);">
+                    Menampilkan 0 dari 0 data
+                </div>
+                <div class="pagination-controls">
+                    <span style="font-size: 13px; color: var(--text-muted);">Per Halaman:</span>
+                    <select id="filter-page-size" onchange="changePageSize()" style="padding: 6px 10px; background: #1e293b; color: #fff; border: 1px solid var(--border-color); border-radius: 6px;">
+                        <option value="10">10</option>
+                        <option value="20" selected>20</option>
+                        <option value="50">50</option>
+                        <option value="100">100</option>
+                    </select>
+                    <button id="btn-prev-page" style="padding: 6px 12px; font-size: 12px; background: #1e293b;" onclick="prevPeakPage()" disabled>◀ Prev</button>
+                    <span id="pagination-current-page" style="font-size: 13px; font-weight: 600; padding: 0 4px;">Halaman 1 / 1</span>
+                    <button id="btn-next-page" style="padding: 6px 12px; font-size: 12px; background: #1e293b;" onclick="nextPeakPage()" disabled>Next ▶</button>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -365,39 +508,157 @@ HTML_DASHBOARD_CONTENT = """<!DOCTYPE html>
             loadTrackedChannels();
         }
 
-        async function loadPeakReports() {
-            const res = await fetch('/api/v1/peaks/');
+        let currentPeakPage = 1;
+        let totalPeakPages = 1;
+
+        async function loadPeakReports(page = currentPeakPage) {
+            currentPeakPage = Math.max(1, page);
+            const videoId = document.getElementById('filter-video-id').value.trim();
+            const minZ = document.getElementById('filter-min-z').value.trim();
+            const minV = document.getElementById('filter-min-velocity').value.trim();
+            const keyword = document.getElementById('filter-keyword').value.trim();
+            const sortBy = document.getElementById('filter-sort-by').value;
+            const sortOrder = document.getElementById('filter-sort-order').value;
+            const pageSize = parseInt(document.getElementById('filter-page-size').value, 10) || 20;
+
+            const params = new URLSearchParams({
+                page: currentPeakPage,
+                page_size: pageSize,
+                sort_by: sortBy,
+                sort_order: sortOrder
+            });
+            if (videoId) params.append('video_id', videoId);
+            if (minZ) params.append('min_z_score', minZ);
+            if (minV) params.append('min_velocity', minV);
+            if (keyword) params.append('keyword', keyword);
+
+            const res = await fetch(`/api/v1/peaks/?${params.toString()}`);
             const data = await res.json();
             const tbody = document.getElementById('reports-table-body');
             tbody.innerHTML = '';
 
-            if (data.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="9" style="color: var(--text-muted);">Belum ada laporan peak tercatat di database.</td></tr>';
-                return;
+            const items = data.items || [];
+            totalPeakPages = data.total_pages || 1;
+            const total = data.total || 0;
+
+            if (items.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="10" style="color: var(--text-muted); text-align: center; padding: 24px;">Tidak ada data highlight yang cocok dengan filter.</td></tr>';
+            } else {
+                items.forEach(p => {
+                    const tr = document.createElement('tr');
+                    const videoTs = (p.video_start_time && p.video_end_time) 
+                        ? `<span class="badge" style="background: rgba(56, 189, 248, 0.2); color: #38bdf8;">${p.video_start_time} - ${p.video_end_time}</span>` 
+                        : '-';
+                    
+                    const sSec = p.start_offset_seconds != null ? Math.floor(p.start_offset_seconds) : 0;
+                    const eSec = p.end_offset_seconds != null ? Math.ceil(p.end_offset_seconds) : (sSec + 30);
+                    const timeLabel = (p.video_start_time && p.video_end_time) ? `${p.video_start_time} - ${p.video_end_time}` : `${sSec}s - ${eSec}s`;
+
+                    tr.innerHTML = `
+                        <td>#${p.id || '-'}</td>
+                        <td><code>${p.video_id}</code></td>
+                        <td><span class="badge">${p.max_z_score.toFixed(2)}</span></td>
+                        <td>${p.max_chat_velocity.toFixed(1)} msg/s</td>
+                        <td>${p.total_messages}</td>
+                        <td>${p.highlight_keywords.join(', ') || '-'}</td>
+                        <td><strong>${videoTs}</strong></td>
+                        <td>${new Date(p.padded_start_time).toLocaleTimeString()}</td>
+                        <td>${new Date(p.padded_end_time).toLocaleTimeString()}</td>
+                        <td>
+                            <button style="padding: 6px 12px; font-size: 12px;" onclick="openClipModal('${p.video_id}', ${sSec}, ${eSec}, '${timeLabel}')">🎬 Review Clip</button>
+                        </td>
+                    `;
+                    tbody.appendChild(tr);
+                });
             }
 
-            data.forEach(p => {
-                const tr = document.createElement('tr');
-                const videoTs = (p.video_start_time && p.video_end_time) 
-                    ? `<span class="badge" style="background: rgba(56, 189, 248, 0.2); color: #38bdf8;">${p.video_start_time} - ${p.video_end_time}</span>` 
-                    : '-';
-                tr.innerHTML = `
-                    <td>#${p.id || '-'}</td>
-                    <td><code>${p.video_id}</code></td>
-                    <td><span class="badge">${p.max_z_score.toFixed(2)}</span></td>
-                    <td>${p.max_chat_velocity.toFixed(1)} msg/s</td>
-                    <td>${p.total_messages}</td>
-                    <td>${p.highlight_keywords.join(', ') || '-'}</td>
-                    <td><strong>${videoTs}</strong></td>
-                    <td>${new Date(p.padded_start_time).toLocaleTimeString()}</td>
-                    <td>${new Date(p.padded_end_time).toLocaleTimeString()}</td>
-                `;
-                tbody.appendChild(tr);
-            });
+            const startEntry = total > 0 ? (currentPeakPage - 1) * pageSize + 1 : 0;
+            const endEntry = Math.min(currentPeakPage * pageSize, total);
+            document.getElementById('pagination-info').innerText = `Menampilkan ${startEntry} - ${endEntry} dari ${total} data`;
+            document.getElementById('pagination-current-page').innerText = `Halaman ${currentPeakPage} / ${totalPeakPages}`;
+            document.getElementById('btn-prev-page').disabled = currentPeakPage <= 1;
+            document.getElementById('btn-next-page').disabled = currentPeakPage >= totalPeakPages;
         }
+
+        function applyPeakFilters() {
+            loadPeakReports(1);
+        }
+
+        function resetPeakFilters() {
+            document.getElementById('filter-video-id').value = '';
+            document.getElementById('filter-min-z').value = '';
+            document.getElementById('filter-min-velocity').value = '';
+            document.getElementById('filter-keyword').value = '';
+            document.getElementById('filter-sort-by').value = 'created_at';
+            document.getElementById('filter-sort-order').value = 'desc';
+            loadPeakReports(1);
+        }
+
+        function changePageSize() {
+            loadPeakReports(1);
+        }
+
+        function prevPeakPage() {
+            if (currentPeakPage > 1) {
+                loadPeakReports(currentPeakPage - 1);
+            }
+        }
+
+        function nextPeakPage() {
+            if (currentPeakPage < totalPeakPages) {
+                loadPeakReports(currentPeakPage + 1);
+            }
+        }
+
+        function openClipModal(videoId, startSec, endSec, timeLabel) {
+            const modal = document.getElementById('clip-modal');
+            const iframe = document.getElementById('clip-iframe');
+            const title = document.getElementById('modal-title');
+            const meta = document.getElementById('modal-meta');
+
+            title.innerText = `🎬 Review Highlight Clip (${videoId})`;
+            meta.innerText = `Range: ${timeLabel} (Detik: ${startSec}s - ${endSec}s)`;
+            
+            iframe.src = `https://www.youtube.com/embed/${encodeURIComponent(videoId)}?start=${startSec}&end=${endSec}&autoplay=1`;
+            modal.classList.add('active');
+        }
+
+        function closeClipModal() {
+            const modal = document.getElementById('clip-modal');
+            const iframe = document.getElementById('clip-iframe');
+            iframe.src = '';
+            modal.classList.remove('active');
+        }
+
+        function handleBackdropClick(event) {
+            if (event.target.id === 'clip-modal') {
+                closeClipModal();
+            }
+        }
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') closeClipModal();
+        });
 
         initChart();
     </script>
+
+    <!-- MODAL REVIEW CLIP -->
+    <div id="clip-modal" class="modal-overlay" onclick="handleBackdropClick(event)">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modal-title">🎬 Review Highlight Clip</h3>
+                <button class="modal-close-btn" onclick="closeClipModal()">&times;</button>
+            </div>
+            <div class="video-container">
+                <iframe id="clip-iframe" src="" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+            </div>
+            <div class="modal-footer">
+                <span id="modal-meta">Range: -</span>
+                <button style="padding: 6px 12px; font-size: 12px;" onclick="closeClipModal()">Tutup</button>
+            </div>
+        </div>
+    </div>
 </body>
 </html>
 """

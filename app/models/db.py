@@ -58,7 +58,7 @@ class PeakEventModel(Base):
     video_end_time: Mapped[str | None] = mapped_column(String(50), nullable=True)
     start_offset_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
     end_offset_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
-    max_z_score: Mapped[float] = mapped_column(Float, nullable=False)
+    max_z_score: Mapped[float] = mapped_column(Float, nullable=False, index=True)
     max_chat_velocity: Mapped[float] = mapped_column(Float, nullable=False)
     total_messages: Mapped[int] = mapped_column(Integer, nullable=False)
     highlight_keywords: Mapped[list] = mapped_column(JSON, default=list)
@@ -114,7 +114,7 @@ class WindowRollupModel(Base):
     avg_chat_velocity: Mapped[float] = mapped_column(Float, nullable=False)
     max_chat_velocity: Mapped[float] = mapped_column(Float, nullable=False)
     avg_z_score: Mapped[float] = mapped_column(Float, nullable=False)
-    max_z_score: Mapped[float] = mapped_column(Float, nullable=False)
+    max_z_score: Mapped[float] = mapped_column(Float, nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=get_utc_now)
 
 

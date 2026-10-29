@@ -23,14 +23,17 @@ async def test_streams_api_endpoints():
 
 @pytest.mark.asyncio
 async def test_peaks_api_endpoints():
+    import uuid
     from datetime import datetime, timezone
     from app.core.database import async_session_factory
     from app.models.db import PeakEventModel
 
+    test_video_id = f"test_vid_{uuid.uuid4().hex[:8]}"
+    test_key = f"key_{uuid.uuid4().hex}"
     now = datetime.now(timezone.utc)
     async with async_session_factory() as session:
         session.add(PeakEventModel(
-            video_id="test_api_vid",
+            video_id=test_video_id,
             start_time=now,
             peak_time=now,
             end_time=now,
@@ -44,25 +47,45 @@ async def test_peaks_api_endpoints():
             max_chat_velocity=5.0,
             total_messages=50,
             highlight_keywords=["gg", "mantap"],
-            dedup_key="test_api_dedup_key_1"
+            dedup_key=test_key
         ))
         await session.commit()
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        # Query recent peaks
+        # Query recent peaks (paginated envelope)
         response = await client.get("/api/v1/peaks/")
         assert response.status_code == 200
         data = response.json()
-        assert isinstance(data, list)
-        matching = [p for p in data if p["video_id"] == "test_api_vid"]
+        assert "items" in data
+        assert "total" in data
+        assert "page" in data
+        assert "total_pages" in data
+        matching = [p for p in data["items"] if p["video_id"] == test_video_id]
         assert len(matching) >= 1
         assert matching[0]["video_start_time"] == "01:15"
         assert matching[0]["video_end_time"] == "01:45"
         assert matching[0]["start_offset_seconds"] == 75.0
         assert matching[0]["end_offset_seconds"] == 105.0
 
+        # Query with filtering and sorting
+        res_filter = await client.get(
+            f"/api/v1/peaks/?video_id={test_video_id}&min_z_score=3.0&keyword=mantap&sort_by=max_z_score&sort_order=desc&page=1&page_size=10"
+        )
+        assert res_filter.status_code == 200
+        f_data = res_filter.json()
+        assert f_data["total"] >= 1
+        assert f_data["items"][0]["video_id"] == test_video_id
+
+        # Query filter with no match returns empty envelope cleanly
+        res_empty = await client.get("/api/v1/peaks/?keyword=nonexistent_keyword_xyz_123")
+        assert res_empty.status_code == 200
+        e_data = res_empty.json()
+        assert e_data["total"] == 0
+        assert e_data["items"] == []
+        assert e_data["total_pages"] == 1
+
         # Query video-specific peaks
-        res_vid = await client.get("/api/v1/peaks/test_api_vid")
+        res_vid = await client.get(f"/api/v1/peaks/{test_video_id}")
         assert res_vid.status_code == 200
         vid_data = res_vid.json()
         assert len(vid_data) >= 1

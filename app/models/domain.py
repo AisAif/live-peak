@@ -54,6 +54,16 @@ class PeakEvent(BaseModel):
     created_at: datetime = Field(default_factory=get_utc_now)
 
 
+class PaginatedPeakResponse(BaseModel):
+    """Paginated envelope for peak highlight events list."""
+    items: list[PeakEvent]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+
+
 class StreamInfo(BaseModel):
     """Represents a YouTube live stream target."""
     video_id: str

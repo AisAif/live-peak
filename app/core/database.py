@@ -1,5 +1,6 @@
 import os
 from typing import AsyncGenerator
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     AsyncEngine,
@@ -32,6 +33,16 @@ engine: AsyncEngine = create_async_engine(
     connect_args={"check_same_thread": False} if "sqlite" in settings.DATABASE_URL else {}
 )
 
+# Apply high-concurrency PRAGMAs for SQLite connections (WAL mode & busy timeout)
+if "sqlite" in settings.DATABASE_URL:
+    @event.listens_for(engine.sync_engine, "connect")
+    def _set_sqlite_pragmas(dbapi_connection, connection_record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL;")
+        cursor.execute("PRAGMA busy_timeout=5000;")
+        cursor.execute("PRAGMA synchronous=NORMAL;")
+        cursor.close()
+
 # Async session factory
 async_session_factory = async_sessionmaker(
     bind=engine,
@@ -49,6 +60,11 @@ def _run_sqlite_migrations(conn) -> None:
     SQLAlchemy's create_all() does not alter existing tables, so new columns and
     unique indexes must be added explicitly to keep old databases compatible.
     """
+    conn.exec_driver_sql("PRAGMA journal_mode=WAL;")
+    conn.exec_driver_sql("PRAGMA busy_timeout=5000;")
+    conn.exec_driver_sql("PRAGMA synchronous=NORMAL;")
+    logger.info("SQLite configuration: WAL mode, busy_timeout=5000ms, synchronous=NORMAL active.")
+
     def table_columns(table_name: str) -> set[str]:
         rows = conn.exec_driver_sql(f"PRAGMA table_info({table_name})").fetchall()
         return {row[1] for row in rows}
@@ -98,6 +114,8 @@ def _run_sqlite_migrations(conn) -> None:
         "ON peak_events(dedup_key)",
         "CREATE INDEX IF NOT EXISTS ix_peak_events_created_at "
         "ON peak_events(created_at)",
+        "CREATE INDEX IF NOT EXISTS ix_peak_events_max_z_score "
+        "ON peak_events(max_z_score)",
         "CREATE INDEX IF NOT EXISTS ix_window_stats_video_end "
         "ON window_stats(video_id, window_end)",
         "CREATE INDEX IF NOT EXISTS ix_window_stats_window_end "
