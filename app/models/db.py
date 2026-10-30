@@ -30,6 +30,9 @@ class TrackedChannelModel(Base):
 class StreamModel(Base):
     """Database ORM model for live stream targets."""
     __tablename__ = "streams"
+    __table_args__ = (
+        Index("ix_streams_started_at", "started_at"),
+    )
 
     video_id: Mapped[str] = mapped_column(String(50), primary_key=True, index=True)
     channel_id: Mapped[str] = mapped_column(String(100), index=True)
@@ -45,6 +48,9 @@ class PeakEventModel(Base):
     __tablename__ = "peak_events"
     __table_args__ = (
         UniqueConstraint("dedup_key", name="uq_peak_events_dedup_key"),
+        Index("ix_peak_events_video_offset", "video_id", "start_offset_seconds"),
+        Index("ix_peak_events_video_peak_time", "video_id", "peak_time"),
+        Index("ix_peak_events_video_max_z", "video_id", "max_z_score"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -66,6 +72,21 @@ class PeakEventModel(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=get_utc_now, index=True
     )
+
+
+class PeakKeywordModel(Base):
+    """Normalized keyword index for fast peak keyword search."""
+    __tablename__ = "peak_keywords"
+    __table_args__ = (
+        UniqueConstraint("peak_id", "keyword", name="uq_peak_keywords_peak_keyword"),
+        Index("ix_peak_keywords_keyword", "keyword"),
+        Index("ix_peak_keywords_video_keyword", "video_id", "keyword"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    peak_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    video_id: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    keyword: Mapped[str] = mapped_column(String(100), nullable=False)
 
 
 class WindowStatsModel(Base):

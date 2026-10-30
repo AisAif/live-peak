@@ -26,13 +26,13 @@ async def test_peaks_api_endpoints():
     import uuid
     from datetime import datetime, timezone
     from app.core.database import async_session_factory
-    from app.models.db import PeakEventModel
+    from app.models.db import PeakEventModel, PeakKeywordModel
 
     test_video_id = f"test_vid_{uuid.uuid4().hex[:8]}"
     test_key = f"key_{uuid.uuid4().hex}"
     now = datetime.now(timezone.utc)
     async with async_session_factory() as session:
-        session.add(PeakEventModel(
+        peak = PeakEventModel(
             video_id=test_video_id,
             start_time=now,
             peak_time=now,
@@ -48,7 +48,17 @@ async def test_peaks_api_endpoints():
             total_messages=50,
             highlight_keywords=["gg", "mantap"],
             dedup_key=test_key
-        ))
+        )
+        session.add(peak)
+        await session.flush()
+        session.add_all([
+            PeakKeywordModel(
+                peak_id=peak.id,
+                video_id=test_video_id,
+                keyword=keyword,
+            )
+            for keyword in ("gg", "mantap")
+        ])
         await session.commit()
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -91,6 +101,72 @@ async def test_peaks_api_endpoints():
         assert len(vid_data) >= 1
         assert vid_data[0]["video_start_time"] == "01:15"
         assert vid_data[0]["video_end_time"] == "01:45"
+
+
+@pytest.mark.asyncio
+async def test_videos_api_endpoints():
+    import uuid
+    from datetime import datetime, timedelta, timezone
+    from app.core.database import async_session_factory
+    from app.models.db import PeakEventModel, StreamModel
+
+    test_video_id = f"vid_{uuid.uuid4().hex[:8]}"
+    now = datetime.now(timezone.utc)
+
+    async with async_session_factory() as session:
+        session.add(StreamModel(
+            video_id=test_video_id,
+            channel_id="UC_VIDEO_TEST",
+            title="Grand Finals Highlights",
+            is_live=False,
+            started_at=now,
+            ended_at=now + timedelta(hours=1),
+        ))
+        for offset, z_score in ((75.0, 3.2), (130.0, 4.8)):
+            session.add(PeakEventModel(
+                video_id=test_video_id,
+                start_time=now + timedelta(seconds=offset),
+                peak_time=now + timedelta(seconds=offset),
+                end_time=now + timedelta(seconds=offset + 10),
+                padded_start_time=now + timedelta(seconds=offset - 15),
+                padded_end_time=now + timedelta(seconds=offset + 25),
+                video_start_time="01:15",
+                video_end_time="01:45",
+                start_offset_seconds=offset,
+                end_offset_seconds=offset + 30,
+                max_z_score=z_score,
+                max_chat_velocity=5.0 + z_score,
+                total_messages=50,
+                highlight_keywords=["gg", "clutch"],
+                dedup_key=f"key_{uuid.uuid4().hex}",
+            ))
+        await session.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        today = now.date().isoformat()
+        res_list = await client.get(
+            f"/api/v1/videos/?search=Grand%20Finals&start_date={today}&end_date={today}"
+        )
+        assert res_list.status_code == 200
+        data = res_list.json()
+        assert data["total"] >= 1
+        matching = [v for v in data["items"] if v["video_id"] == test_video_id]
+        assert len(matching) == 1
+        assert matching[0]["title"] == "Grand Finals Highlights"
+        assert matching[0]["peak_count"] == 2
+        assert matching[0]["max_z_score"] == 4.8
+        assert matching[0]["total_messages"] == 100
+
+        res_detail = await client.get(f"/api/v1/videos/{test_video_id}")
+        assert res_detail.status_code == 200
+        detail = res_detail.json()
+        assert detail["title"] == "Grand Finals Highlights"
+        assert detail["peak_count"] == 2
+        assert len(detail["minutes"]) == 2
+        assert detail["minutes"][0]["minute_label"] == "01:00"
+        assert detail["minutes"][1]["minute_label"] == "02:00"
+        assert detail["minutes"][0]["peak_count"] == 1
+        assert detail["minutes"][1]["max_z_score"] == 4.8
 
 
 @pytest.mark.asyncio

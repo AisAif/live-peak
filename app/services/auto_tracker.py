@@ -1,4 +1,5 @@
 import asyncio
+import time
 from sqlalchemy import select, delete
 from app.core.logger import logger
 from app.core.database import async_session_factory
@@ -14,11 +15,19 @@ class AutoChannelTracker:
     Persists target channels in SQLite DB ('tracked_channels' table).
     """
 
-    def __init__(self, check_interval_seconds: int = 60):
+    def __init__(
+        self,
+        check_interval_seconds: int = 60,
+        max_concurrent_checks: int = 5,
+        name_cache_ttl_seconds: float = 3600.0
+    ):
         self.check_interval = check_interval_seconds
+        self.max_concurrent_checks = max_concurrent_checks
+        self.name_cache_ttl_seconds = name_cache_ttl_seconds
         self.discovery_service = StreamDiscoveryService()
         self.is_running = False
         self.task: asyncio.Task | None = None
+        self._name_cache: dict[str, tuple[str, float]] = {}
 
     async def add_channel(self, channel_or_handle: str) -> dict | None:
         """
@@ -73,11 +82,23 @@ class AutoChannelTracker:
 
             channels = []
             for r in records:
-                # Auto-enrich missing channel name if it matches channel_id
+                # Auto-enrich missing channel name if it matches channel_id.
+                # Resolutions (including failures) are cached to avoid hammering YouTube.
                 if r.channel_name == r.channel_id:
-                    details = await self.discovery_service.resolve_channel_details(r.channel_id)
-                    if details and details[1] and details[1] != r.channel_id:
-                        r.channel_name = details[1]
+                    cached = self._name_cache.get(r.channel_id)
+                    if cached and (time.monotonic() - cached[1]) < self.name_cache_ttl_seconds:
+                        cached_name = cached[0]
+                    else:
+                        details = await self.discovery_service.resolve_channel_details(r.channel_id)
+                        cached_name = (
+                            details[1]
+                            if details and details[1]
+                            else r.channel_id
+                        )
+                        self._name_cache[r.channel_id] = (cached_name, time.monotonic())
+
+                    if cached_name and cached_name != r.channel_id:
+                        r.channel_name = cached_name
                         await session.commit()
                 channels.append({"channel_id": r.channel_id, "channel_name": r.channel_name})
 
@@ -101,25 +122,41 @@ class AutoChannelTracker:
         while self.is_running:
             try:
                 channels = await self.list_channels_enriched()
-                for ch in channels:
-                    channel_id = ch["channel_id"]
-                    stream_info = await self.discovery_service.discover_by_channel_id(channel_id)
-                    if stream_info and stream_info.is_live:
-                        video_id = stream_info.video_id
-                        if video_id not in stream_manager.active_workers:
-                            logger.info(
-                                f"🎥 Auto-detected LIVE stream for channel {ch['channel_name']} ({channel_id})! "
-                                f"Starting automatic tracking for video {video_id} ('{stream_info.title}')"
-                            )
-                            await stream_manager.start_monitoring_stream(
-                                video_id,
-                                channel_id=channel_id,
-                                title=stream_info.title
-                            )
+                semaphore = asyncio.Semaphore(self.max_concurrent_checks)
+                await asyncio.gather(*[
+                    self._check_channel(ch, semaphore) for ch in channels
+                ])
             except Exception as e:
                 logger.error(f"Error in auto-tracker periodic check: {e}")
 
             await asyncio.sleep(self.check_interval)
+
+    async def _check_channel(self, channel: dict, semaphore: asyncio.Semaphore) -> None:
+        """Discovers a channel's live stream concurrently with a bounded semaphore."""
+        async with semaphore:
+            channel_id = channel["channel_id"]
+            try:
+                stream_info = await self.discovery_service.discover_by_channel_id(channel_id)
+            except Exception as e:
+                logger.error(f"Error discovering channel {channel_id}: {e}")
+                return
+
+            if not stream_info or not stream_info.is_live:
+                return
+
+            video_id = stream_info.video_id
+            if video_id in stream_manager.active_workers:
+                return
+
+            logger.info(
+                f"🎥 Auto-detected LIVE stream for channel {channel['channel_name']} ({channel_id})! "
+                f"Starting automatic tracking for video {video_id} ('{stream_info.title}')"
+            )
+            await stream_manager.start_monitoring_stream(
+                video_id,
+                channel_id=channel_id,
+                title=stream_info.title
+            )
 
 
 auto_tracker = AutoChannelTracker()

@@ -22,6 +22,12 @@ class ChatIngestionService:
         self.message_callback = message_callback
         self.max_reconnect_attempts = max_reconnect_attempts
         self.is_running = False
+        self._chat = None
+
+    @staticmethod
+    def _collect_items(chat) -> list:
+        """Drains available chat items; runs in a worker thread to avoid blocking."""
+        return list(chat.get().sync_items())
 
     async def start_listening(self) -> None:
         """
@@ -37,14 +43,16 @@ class ChatIngestionService:
             try:
                 # Create pytchat async listener
                 chat = pytchat.create(video_id=self.video_id)
+                self._chat = chat
                 attempt = 0  # Reset attempt counter on successful connection
                 backoff_delay = 2.0
 
                 logger.info(f"Connected to YouTube live chat stream: {self.video_id}")
 
                 while self.is_running and chat.is_alive():
-                    # Process incoming chat messages asynchronously
-                    for item in chat.get().sync_items():
+                    # pytchat is synchronous and may block; drain it off the event loop.
+                    items = await asyncio.to_thread(self._collect_items, chat)
+                    for item in items:
                         chat_msg = ChatMessage(
                             video_id=self.video_id,
                             message_id=getattr(item, "id", None),
@@ -56,8 +64,6 @@ class ChatIngestionService:
 
                         if self.message_callback:
                             await self.message_callback(chat_msg)
-
-                    await asyncio.sleep(0.5)
 
                 if not chat.is_alive():
                     logger.warning(f"Live chat connection died for video {self.video_id}. Reconnecting...")
@@ -78,5 +84,12 @@ class ChatIngestionService:
         logger.info(f"Chat ingestion listener stopped for video {self.video_id}.")
 
     def stop(self) -> None:
-        """Stops live chat ingestion loop."""
+        """Stops live chat ingestion loop and unblocks any pending thread read."""
         self.is_running = False
+        chat = self._chat
+        self._chat = None
+        if chat is not None:
+            try:
+                chat.terminate()
+            except Exception as e:
+                logger.warning(f"Error terminating chat listener for {self.video_id}: {e}")

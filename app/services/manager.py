@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import hashlib
 from datetime import datetime, timezone
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from app.core.logger import logger
@@ -11,6 +12,7 @@ from app.models.domain import ChatMessage, WindowStats, PeakEvent
 from app.models.db import (
     ChatMessageModel,
     PeakEventModel,
+    PeakKeywordModel,
     WindowStatsModel,
     StreamModel,
 )
@@ -84,7 +86,7 @@ class ActiveStreamWorker:
             if peak_event is not None:
                 saved = await self._persist_peak_event(peak_event)
                 if saved:
-                    await notification_service.send_peak_alert(peak_event)
+                    notification_service.enqueue_peak_alert(peak_event)
 
     async def _persist_window_stats(self, stats: WindowStats) -> bool:
         """Saves periodic WindowStats to DB idempotently by (video_id, window_start)."""
@@ -116,6 +118,7 @@ class ActiveStreamWorker:
 
     async def _persist_peak_event(self, peak: PeakEvent) -> bool:
         """Saves a finalized PeakEvent highlight to DB idempotently by dedup_key."""
+        dedup_key = build_peak_dedup_key(peak)
         try:
             async with async_session_factory() as session:
                 stmt = _insert_for(PeakEventModel).values(
@@ -133,17 +136,54 @@ class ActiveStreamWorker:
                     max_chat_velocity=peak.max_chat_velocity,
                     total_messages=peak.total_messages,
                     highlight_keywords=peak.highlight_keywords,
-                    dedup_key=build_peak_dedup_key(peak)
+                    dedup_key=dedup_key
                 ).on_conflict_do_nothing(index_elements=["dedup_key"])
                 result = await session.execute(stmt)
-                await session.commit()
                 saved = (result.rowcount or 0) > 0
+
+                peak_id = (await session.execute(
+                    select(PeakEventModel.id).where(
+                        PeakEventModel.dedup_key == dedup_key
+                    )
+                )).scalar_one_or_none()
+                if peak_id is not None:
+                    await self._persist_peak_keywords(session, peak_id, peak)
+
+                await session.commit()
                 if saved:
                     logger.info(f"Successfully saved Peak Event for video {self.video_id} to DB.")
                 return saved
         except Exception as e:
             logger.error(f"Error persisting peak event for {self.video_id}: {e}")
             return False
+
+    async def _persist_peak_keywords(
+        self,
+        session,
+        peak_id: int,
+        peak: PeakEvent
+    ) -> None:
+        """Indexes a peak's keywords in the normalized search table."""
+        keywords = []
+        seen: set[str] = set()
+        for keyword in peak.highlight_keywords or []:
+            normalized = keyword.strip().lower()[:100]
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            keywords.append({
+                "peak_id": peak_id,
+                "video_id": peak.video_id,
+                "keyword": normalized,
+            })
+
+        if not keywords:
+            return
+
+        stmt = _insert_for(PeakKeywordModel).values(keywords).on_conflict_do_nothing(
+            index_elements=["peak_id", "keyword"]
+        )
+        await session.execute(stmt)
 
     async def _flush_chat_buffer(self) -> None:
         """Persists buffered raw chat messages in batches, ignoring duplicate IDs."""
@@ -299,7 +339,7 @@ class StreamManager:
             if final_peak:
                 saved = await worker._persist_peak_event(final_peak)
                 if saved:
-                    await notification_service.send_peak_alert(final_peak)
+                    notification_service.enqueue_peak_alert(final_peak)
 
             # Persist any raw chat messages still waiting in the buffer
             await worker._flush_chat_buffer()

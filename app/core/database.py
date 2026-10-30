@@ -41,6 +41,9 @@ if "sqlite" in settings.DATABASE_URL:
         cursor.execute("PRAGMA journal_mode=WAL;")
         cursor.execute("PRAGMA busy_timeout=5000;")
         cursor.execute("PRAGMA synchronous=NORMAL;")
+        cursor.execute("PRAGMA cache_size=-64000;")
+        cursor.execute("PRAGMA temp_store=MEMORY;")
+        cursor.execute("PRAGMA mmap_size=268435456;")
         cursor.close()
 
 # Async session factory
@@ -107,7 +110,37 @@ def _run_sqlite_migrations(conn) -> None:
         "UPDATE peak_events SET dedup_key = 'legacy-' || id WHERE dedup_key IS NULL"
     )
 
+    # Backfill the normalized keyword index once for pre-existing peaks.
+    try:
+        keyword_count = conn.exec_driver_sql(
+            "SELECT COUNT(*) FROM peak_keywords"
+        ).scalar() or 0
+        if keyword_count == 0:
+            conn.exec_driver_sql(
+                "INSERT OR IGNORE INTO peak_keywords (peak_id, video_id, keyword) "
+                "SELECT p.id, p.video_id, lower(trim(j.value)) "
+                "FROM peak_events p, json_each(p.highlight_keywords) j "
+                "WHERE j.value IS NOT NULL AND trim(j.value) != ''"
+            )
+            logger.info("Migration: backfilled peak_keywords from existing peaks.")
+    except Exception as e:
+        logger.warning(f"Peak keyword backfill skipped: {e}")
+
     migrations = [
+        "CREATE INDEX IF NOT EXISTS ix_peak_keywords_keyword "
+        "ON peak_keywords(keyword)",
+        "CREATE INDEX IF NOT EXISTS ix_peak_keywords_video_keyword "
+        "ON peak_keywords(video_id, keyword)",
+        "CREATE INDEX IF NOT EXISTS ix_peak_keywords_peak_id "
+        "ON peak_keywords(peak_id)",
+        "CREATE INDEX IF NOT EXISTS ix_streams_started_at "
+        "ON streams(started_at)",
+        "CREATE INDEX IF NOT EXISTS ix_peak_events_video_offset "
+        "ON peak_events(video_id, start_offset_seconds)",
+        "CREATE INDEX IF NOT EXISTS ix_peak_events_video_peak_time "
+        "ON peak_events(video_id, peak_time)",
+        "CREATE INDEX IF NOT EXISTS ix_peak_events_video_max_z "
+        "ON peak_events(video_id, max_z_score)",
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_window_stats_video_start "
         "ON window_stats(video_id, window_start)",
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_peak_events_dedup_key "

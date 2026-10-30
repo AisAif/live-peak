@@ -1,9 +1,9 @@
 import math
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc, asc, func, and_, cast, Text
+from sqlalchemy import select, desc, asc, func, and_
 from app.core.database import get_db_session
-from app.models.db import PeakEventModel
+from app.models.db import PeakEventModel, PeakKeywordModel
 from app.models.domain import PeakEvent, PaginatedPeakResponse
 
 router = APIRouter(prefix="/peaks", tags=["Peak Highlights"])
@@ -63,9 +63,12 @@ async def get_all_recent_peaks(
         conditions.append(PeakEventModel.max_z_score >= min_z_score)
     if min_velocity is not None:
         conditions.append(PeakEventModel.max_chat_velocity >= min_velocity)
-    if keyword:
+    if keyword and keyword.strip():
         keyword_clean = f"%{keyword.strip().lower()}%"
-        conditions.append(cast(PeakEventModel.highlight_keywords, Text).ilike(keyword_clean))
+        keyword_peak_ids = select(PeakKeywordModel.peak_id).where(
+            PeakKeywordModel.keyword.like(keyword_clean)
+        )
+        conditions.append(PeakEventModel.id.in_(keyword_peak_ids))
 
     count_stmt = select(func.count()).select_from(PeakEventModel)
     if conditions:

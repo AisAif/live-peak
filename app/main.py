@@ -8,6 +8,7 @@ from app.api.router import main_router
 
 
 from app.services.auto_tracker import auto_tracker
+from app.services.notification import notification_service
 from app.services.retention import retention_service
 
 @asynccontextmanager
@@ -34,9 +35,13 @@ async def lifespan(app: FastAPI):
     # 4. Start Data Retention & Rollup worker
     await retention_service.start()
 
+    # 5. Start non-blocking webhook notification worker
+    await notification_service.start()
+
     yield
     
     # Shut-down cleanup
+    await notification_service.stop()
     await retention_service.stop()
     await auto_tracker.stop()
     logger.info(f"Shutting down {settings.PROJECT_NAME}...")

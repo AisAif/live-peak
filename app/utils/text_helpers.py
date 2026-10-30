@@ -21,6 +21,7 @@ ACTIVE_STOPWORDS: set[str] = set(DEFAULT_STOPWORDS)
 # Noise patterns commonly found in live chat messages
 URL_PATTERN = re.compile(r"https?://\S+|www\.\S+", re.IGNORECASE)
 MENTION_PATTERN = re.compile(r"@\w+")
+PUNCTUATION_PATTERN = re.compile(r"[^\w\s]|_")
 
 # Free open-source GitHub raw endpoints for comprehensive stopwords
 INDONESIAN_STOPWORDS_URL = "https://raw.githubusercontent.com/stopwords-iso/stopwords-id/master/stopwords-id.json"
@@ -83,23 +84,27 @@ def extract_emojis(text: str) -> list[str]:
     return EMOJI_PATTERN.findall(text)
 
 
-def extract_top_keywords(messages: list[str], top_n: int = 5) -> list[str]:
+def extract_keywords_and_emojis(
+    messages: list[str], top_n: int = 5
+) -> tuple[list[str], int]:
     """
-    Extracts top N most frequent meaningful keywords or emojis from a list of chat messages.
+    Extracts top N meaningful keywords/emojis and the total emoji count in one pass.
+
     Filters out active stopwords and short words (< 2 characters).
     """
     words: list[str] = []
+    emoji_count = 0
     for msg in messages:
-        # Extract emojis
+        # Extract emojis once and reuse them for both the count and keyword list.
         emojis = extract_emojis(msg)
+        emoji_count += len(emojis)
         words.extend(emojis)
 
         # Remove URLs, mentions, and punctuation before tokenizing
         clean_text = URL_PATTERN.sub(" ", msg)
         clean_text = MENTION_PATTERN.sub(" ", clean_text)
-        clean_text = re.sub(r"[^\w\s]|_", " ", clean_text).lower()
-        tokens = clean_text.split()
-        for token in tokens:
+        clean_text = PUNCTUATION_PATTERN.sub(" ", clean_text).lower()
+        for token in clean_text.split():
             if (
                 len(token) > 2
                 and not token.isdigit()
@@ -108,7 +113,16 @@ def extract_top_keywords(messages: list[str], top_n: int = 5) -> list[str]:
                 words.append(token)
 
     if not words:
-        return []
+        return [], emoji_count
 
     counts = Counter(words)
-    return [word for word, _ in counts.most_common(top_n)]
+    return [word for word, _ in counts.most_common(top_n)], emoji_count
+
+
+def extract_top_keywords(messages: list[str], top_n: int = 5) -> list[str]:
+    """
+    Extracts top N most frequent meaningful keywords or emojis from a list of chat messages.
+    Filters out active stopwords and short words (< 2 characters).
+    """
+    keywords, _ = extract_keywords_and_emojis(messages, top_n=top_n)
+    return keywords

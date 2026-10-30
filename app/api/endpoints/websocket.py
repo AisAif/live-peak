@@ -15,31 +15,38 @@ async def websocket_live_analytics(websocket: WebSocket, video_id: str):
     await websocket.accept()
     logger.info(f"WebSocket client connected for video {video_id}")
 
+    last_window_start = None
+    waiting_sent = False
+
     try:
         while True:
             worker = stream_manager.active_workers.get(video_id)
             if worker and worker.analytics.history:
                 latest_stats = worker.analytics.history[-1]
-                data = {
-                    "video_id": latest_stats.video_id,
-                    "window_start": latest_stats.window_start.isoformat(),
-                    "window_end": latest_stats.window_end.isoformat(),
-                    "message_count": latest_stats.message_count,
-                    "chat_velocity": latest_stats.chat_velocity,
-                    "emoji_count": latest_stats.emoji_count,
-                    "top_keywords": latest_stats.top_keywords,
-                    "z_score": latest_stats.z_score,
-                    "ewma_velocity": latest_stats.ewma_velocity,
-                    "ewma_z_score": latest_stats.ewma_z_score,
-                    "cusum_score": latest_stats.cusum_score,
-                    "peak_source": latest_stats.peak_source,
-                    "is_peak": latest_stats.is_peak
-                }
-                await websocket.send_json(data)
-            else:
+                if latest_stats.window_start != last_window_start:
+                    last_window_start = latest_stats.window_start
+                    waiting_sent = False
+                    data = {
+                        "video_id": latest_stats.video_id,
+                        "window_start": latest_stats.window_start.isoformat(),
+                        "window_end": latest_stats.window_end.isoformat(),
+                        "message_count": latest_stats.message_count,
+                        "chat_velocity": latest_stats.chat_velocity,
+                        "emoji_count": latest_stats.emoji_count,
+                        "top_keywords": latest_stats.top_keywords,
+                        "z_score": latest_stats.z_score,
+                        "ewma_velocity": latest_stats.ewma_velocity,
+                        "ewma_z_score": latest_stats.ewma_z_score,
+                        "cusum_score": latest_stats.cusum_score,
+                        "peak_source": latest_stats.peak_source,
+                        "is_peak": latest_stats.is_peak
+                    }
+                    await websocket.send_json(data)
+            elif not waiting_sent:
                 await websocket.send_json({"status": "waiting", "video_id": video_id})
+                waiting_sent = True
 
-            await asyncio.sleep(2.0)
+            await asyncio.sleep(1.0)
 
     except WebSocketDisconnect:
         logger.info(f"WebSocket client disconnected for video {video_id}")

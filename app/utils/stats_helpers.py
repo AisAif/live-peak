@@ -71,6 +71,18 @@ def calculate_robust_stats(values: list[float]) -> tuple[float, float]:
     return median, mad
 
 
+def calculate_z_from_center_scale(
+    current_val: float,
+    center: float,
+    scale: float,
+    flat_anomaly_score: float = 3.0
+) -> float:
+    """Calculates a Z-score directly from a precomputed baseline center/scale."""
+    if scale > 0.0:
+        return float((current_val - center) / scale)
+    return 0.0 if current_val <= center else flat_anomaly_score
+
+
 def calculate_robust_z_score(
     current_val: float,
     baseline_median: float,

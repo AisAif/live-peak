@@ -10,6 +10,7 @@ from app.core.logger import logger
 from app.models.db import (
     ChatMessageModel,
     PeakEventModel,
+    PeakKeywordModel,
     WindowRollupModel,
     WindowStatsModel,
 )
@@ -108,6 +109,14 @@ class RetentionService:
                     windows_deleted = self._affected_rows(result)
 
                 if peak_cutoff is not None:
+                    expired_peak_ids = select(PeakEventModel.id).where(
+                        PeakEventModel.created_at < peak_cutoff
+                    )
+                    await session.execute(
+                        delete(PeakKeywordModel).where(
+                            PeakKeywordModel.peak_id.in_(expired_peak_ids)
+                        )
+                    )
                     result = await session.execute(
                         delete(PeakEventModel).where(
                             PeakEventModel.created_at < peak_cutoff

@@ -308,71 +308,95 @@ HTML_DASHBOARD_CONTENT = """<!DOCTYPE html>
         </div>
     </div>
 
-    <!-- TAB 3: PEAK REPORTS -->
+    <!-- TAB 3: VIDEO HIGHLIGHT REPORTS -->
     <div id="peak-reports" class="tab-content">
         <div class="card">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-                <h3>📑 Historical Peak Highlight Reports</h3>
-                <button onclick="loadPeakReports(1)">🔄 Refresh Reports</button>
-            </div>
-
-            <!-- FILTER BAR -->
-            <div class="filter-bar">
-                <input type="text" id="filter-video-id" placeholder="Cari Video ID..." style="width: 140px;">
-                <input type="number" id="filter-min-z" placeholder="Min Z-Score" step="0.5" style="width: 110px;">
-                <input type="number" id="filter-min-velocity" placeholder="Min Velocity (msg/s)" step="1" style="width: 150px;">
-                <input type="text" id="filter-keyword" placeholder="Cari Keyword..." style="width: 130px;">
-                <select id="filter-sort-by">
-                    <option value="created_at">Urutkan: Waktu Deteksi</option>
-                    <option value="max_z_score">Urutkan: Z-Score Tertinggi</option>
-                    <option value="max_chat_velocity">Urutkan: Chat Velocity</option>
-                    <option value="total_messages">Urutkan: Total Pesan</option>
-                </select>
-                <select id="filter-sort-order">
-                    <option value="desc">Menurun (Desc)</option>
-                    <option value="asc">Menaik (Asc)</option>
-                </select>
-                <button style="padding: 8px 14px;" onclick="applyPeakFilters()">🔍 Filter</button>
-                <button style="padding: 8px 14px; background: #334155;" onclick="resetPeakFilters()">↺ Reset</button>
-            </div>
-
-            <table>
-                <thead>
-                    <tr>
-                        <th>ID</th>
-                        <th>Video ID</th>
-                        <th>Max Z-Score</th>
-                        <th>Max Velocity</th>
-                        <th>Total Chat</th>
-                        <th>Keywords</th>
-                        <th>Video Timestamp</th>
-                        <th>Clip Start</th>
-                        <th>Clip End</th>
-                        <th>Action</th>
-                    </tr>
-                </thead>
-                <tbody id="reports-table-body">
-                    <tr><td colspan="10" style="color: var(--text-muted);">Memuat data laporan...</td></tr>
-                </tbody>
-            </table>
-
-            <!-- PAGINATION BAR -->
-            <div class="pagination-bar">
-                <div id="pagination-info" style="font-size: 13px; color: var(--text-muted);">
-                    Menampilkan 0 dari 0 data
+            <!-- VIDEO LIST PANEL -->
+            <div id="video-list-panel">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <h3>📑 Video Highlight Reports</h3>
+                    <button onclick="loadVideoReports(1)">🔄 Refresh Reports</button>
                 </div>
-                <div class="pagination-controls">
-                    <span style="font-size: 13px; color: var(--text-muted);">Per Halaman:</span>
-                    <select id="filter-page-size" onchange="changePageSize()" style="padding: 6px 10px; background: #1e293b; color: #fff; border: 1px solid var(--border-color); border-radius: 6px;">
-                        <option value="10">10</option>
-                        <option value="20" selected>20</option>
-                        <option value="50">50</option>
-                        <option value="100">100</option>
+
+                <!-- FILTER BAR -->
+                <div class="filter-bar">
+                    <label style="font-size: 13px; color: var(--text-muted);">Dari</label>
+                    <input type="date" id="filter-start-date">
+                    <label style="font-size: 13px; color: var(--text-muted);">Sampai</label>
+                    <input type="date" id="filter-end-date">
+                    <input type="text" id="filter-video-search" placeholder="Cari judul video..." style="width: 200px;">
+                    <select id="filter-sort-by">
+                        <option value="video_date">Urutkan: Tanggal Video</option>
+                        <option value="peak_count">Urutkan: Jumlah Peak</option>
+                        <option value="max_z_score">Urutkan: Z-Score Tertinggi</option>
+                        <option value="total_messages">Urutkan: Total Pesan</option>
                     </select>
-                    <button id="btn-prev-page" style="padding: 6px 12px; font-size: 12px; background: #1e293b;" onclick="prevPeakPage()" disabled>◀ Prev</button>
-                    <span id="pagination-current-page" style="font-size: 13px; font-weight: 600; padding: 0 4px;">Halaman 1 / 1</span>
-                    <button id="btn-next-page" style="padding: 6px 12px; font-size: 12px; background: #1e293b;" onclick="nextPeakPage()" disabled>Next ▶</button>
+                    <select id="filter-sort-order">
+                        <option value="desc">Menurun (Desc)</option>
+                        <option value="asc">Menaik (Asc)</option>
+                    </select>
+                    <button style="padding: 8px 14px;" onclick="applyVideoFilters()">🔍 Filter</button>
+                    <button style="padding: 8px 14px; background: #334155;" onclick="resetVideoFilters()">↺ Reset</button>
                 </div>
+
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Video</th>
+                            <th>Channel</th>
+                            <th>Tanggal</th>
+                            <th>Jumlah Peak</th>
+                            <th>Max Z-Score</th>
+                            <th>Total Chat</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="videos-table-body">
+                        <tr><td colspan="7" style="color: var(--text-muted);">Memuat daftar video...</td></tr>
+                    </tbody>
+                </table>
+
+                <!-- PAGINATION BAR -->
+                <div class="pagination-bar">
+                    <div id="pagination-info" style="font-size: 13px; color: var(--text-muted);">
+                        Menampilkan 0 dari 0 video
+                    </div>
+                    <div class="pagination-controls">
+                        <span style="font-size: 13px; color: var(--text-muted);">Per Halaman:</span>
+                        <select id="filter-page-size" onchange="changePageSize()" style="padding: 6px 10px; background: #1e293b; color: #fff; border: 1px solid var(--border-color); border-radius: 6px;">
+                            <option value="10">10</option>
+                            <option value="20" selected>20</option>
+                            <option value="50">50</option>
+                            <option value="100">100</option>
+                        </select>
+                        <button id="btn-prev-page" style="padding: 6px 12px; font-size: 12px; background: #1e293b;" onclick="prevVideoPage()" disabled>◀ Prev</button>
+                        <span id="pagination-current-page" style="font-size: 13px; font-weight: 600; padding: 0 4px;">Halaman 1 / 1</span>
+                        <button id="btn-next-page" style="padding: 6px 12px; font-size: 12px; background: #1e293b;" onclick="nextVideoPage()" disabled>Next ▶</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- VIDEO DETAIL PANEL -->
+            <div id="video-detail-panel" style="display: none;">
+                <button style="padding: 8px 14px; background: #334155;" onclick="closeVideoDetail()">← Kembali ke daftar video</button>
+                <h3 id="video-detail-title" style="margin-top: 16px;"></h3>
+                <div id="video-detail-meta" style="color: var(--text-muted); font-size: 13px; margin-bottom: 12px;"></div>
+
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Menit</th>
+                            <th>Range</th>
+                            <th>Jumlah Peak</th>
+                            <th>Max Z-Score</th>
+                            <th>Max Velocity</th>
+                            <th>Total Chat</th>
+                            <th>Keywords</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="minutes-table-body"></tbody>
+                </table>
             </div>
         </div>
     </div>
@@ -389,7 +413,7 @@ HTML_DASHBOARD_CONTENT = """<!DOCTYPE html>
             event.currentTarget.classList.add('active');
 
             if (tabId === 'channel-tracker') loadTrackedChannels();
-            if (tabId === 'peak-reports') loadPeakReports();
+            if (tabId === 'peak-reports') loadVideoReports();
         }
 
         function initChart() {
@@ -508,105 +532,156 @@ HTML_DASHBOARD_CONTENT = """<!DOCTYPE html>
             loadTrackedChannels();
         }
 
-        let currentPeakPage = 1;
-        let totalPeakPages = 1;
+        let currentVideoPage = 1;
+        let totalVideoPages = 1;
 
-        async function loadPeakReports(page = currentPeakPage) {
-            currentPeakPage = Math.max(1, page);
-            const videoId = document.getElementById('filter-video-id').value.trim();
-            const minZ = document.getElementById('filter-min-z').value.trim();
-            const minV = document.getElementById('filter-min-velocity').value.trim();
-            const keyword = document.getElementById('filter-keyword').value.trim();
+        function escapeHtml(value) {
+            return String(value ?? '').replace(/[&<>"']/g, (ch) => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+            }[ch]));
+        }
+
+        async function loadVideoReports(page = currentVideoPage) {
+            currentVideoPage = Math.max(1, page);
+            const startDate = document.getElementById('filter-start-date').value;
+            const endDate = document.getElementById('filter-end-date').value;
+            const search = document.getElementById('filter-video-search').value.trim();
             const sortBy = document.getElementById('filter-sort-by').value;
             const sortOrder = document.getElementById('filter-sort-order').value;
             const pageSize = parseInt(document.getElementById('filter-page-size').value, 10) || 20;
 
             const params = new URLSearchParams({
-                page: currentPeakPage,
+                page: currentVideoPage,
                 page_size: pageSize,
                 sort_by: sortBy,
                 sort_order: sortOrder
             });
-            if (videoId) params.append('video_id', videoId);
-            if (minZ) params.append('min_z_score', minZ);
-            if (minV) params.append('min_velocity', minV);
-            if (keyword) params.append('keyword', keyword);
+            if (startDate) params.append('start_date', startDate);
+            if (endDate) params.append('end_date', endDate);
+            if (search) params.append('search', search);
 
-            const res = await fetch(`/api/v1/peaks/?${params.toString()}`);
+            const res = await fetch(`/api/v1/videos/?${params.toString()}`);
             const data = await res.json();
-            const tbody = document.getElementById('reports-table-body');
+            const tbody = document.getElementById('videos-table-body');
             tbody.innerHTML = '';
 
             const items = data.items || [];
-            totalPeakPages = data.total_pages || 1;
+            totalVideoPages = data.total_pages || 1;
             const total = data.total || 0;
 
             if (items.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="10" style="color: var(--text-muted); text-align: center; padding: 24px;">Tidak ada data highlight yang cocok dengan filter.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="7" style="color: var(--text-muted); text-align: center; padding: 24px;">Tidak ada video yang cocok dengan filter.</td></tr>';
             } else {
-                items.forEach(p => {
+                items.forEach(v => {
                     const tr = document.createElement('tr');
-                    const videoTs = (p.video_start_time && p.video_end_time) 
-                        ? `<span class="badge" style="background: rgba(56, 189, 248, 0.2); color: #38bdf8;">${p.video_start_time} - ${p.video_end_time}</span>` 
-                        : '-';
-                    
-                    const sSec = p.start_offset_seconds != null ? Math.floor(p.start_offset_seconds) : 0;
-                    const eSec = p.end_offset_seconds != null ? Math.ceil(p.end_offset_seconds) : (sSec + 30);
-                    const timeLabel = (p.video_start_time && p.video_end_time) ? `${p.video_start_time} - ${p.video_end_time}` : `${sSec}s - ${eSec}s`;
-
+                    const dateStr = v.started_at ? new Date(v.started_at).toLocaleString() : '-';
+                    const liveBadge = v.is_live ? ' <span class="badge badge-success">LIVE</span>' : '';
                     tr.innerHTML = `
-                        <td>#${p.id || '-'}</td>
-                        <td><code>${p.video_id}</code></td>
-                        <td><span class="badge">${p.max_z_score.toFixed(2)}</span></td>
-                        <td>${p.max_chat_velocity.toFixed(1)} msg/s</td>
-                        <td>${p.total_messages}</td>
-                        <td>${p.highlight_keywords.join(', ') || '-'}</td>
-                        <td><strong>${videoTs}</strong></td>
-                        <td>${new Date(p.padded_start_time).toLocaleTimeString()}</td>
-                        <td>${new Date(p.padded_end_time).toLocaleTimeString()}</td>
                         <td>
-                            <button style="padding: 6px 12px; font-size: 12px;" onclick="openClipModal('${p.video_id}', ${sSec}, ${eSec}, '${timeLabel}')">🎬 Review Clip</button>
+                            <strong>${escapeHtml(v.title)}</strong>${liveBadge}
+                            <div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;"><code>${escapeHtml(v.video_id)}</code></div>
                         </td>
+                        <td><code>${escapeHtml(v.channel_id || '-')}</code></td>
+                        <td>${dateStr}</td>
+                        <td><span class="badge">${v.peak_count}</span></td>
+                        <td>${v.max_z_score.toFixed(2)}</td>
+                        <td>${v.total_messages}</td>
+                        <td><button style="padding: 6px 12px; font-size: 12px;" onclick="openVideoDetail('${v.video_id}')">📂 Buka</button></td>
                     `;
                     tbody.appendChild(tr);
                 });
             }
 
-            const startEntry = total > 0 ? (currentPeakPage - 1) * pageSize + 1 : 0;
-            const endEntry = Math.min(currentPeakPage * pageSize, total);
-            document.getElementById('pagination-info').innerText = `Menampilkan ${startEntry} - ${endEntry} dari ${total} data`;
-            document.getElementById('pagination-current-page').innerText = `Halaman ${currentPeakPage} / ${totalPeakPages}`;
-            document.getElementById('btn-prev-page').disabled = currentPeakPage <= 1;
-            document.getElementById('btn-next-page').disabled = currentPeakPage >= totalPeakPages;
+            const startEntry = total > 0 ? (currentVideoPage - 1) * pageSize + 1 : 0;
+            const endEntry = Math.min(currentVideoPage * pageSize, total);
+            document.getElementById('pagination-info').innerText = `Menampilkan ${startEntry} - ${endEntry} dari ${total} video`;
+            document.getElementById('pagination-current-page').innerText = `Halaman ${currentVideoPage} / ${totalVideoPages}`;
+            document.getElementById('btn-prev-page').disabled = currentVideoPage <= 1;
+            document.getElementById('btn-next-page').disabled = currentVideoPage >= totalVideoPages;
         }
 
-        function applyPeakFilters() {
-            loadPeakReports(1);
+        async function openVideoDetail(videoId) {
+            const res = await fetch(`/api/v1/videos/${encodeURIComponent(videoId)}`);
+            if (!res.ok) {
+                alert('Gagal memuat detail video.');
+                return;
+            }
+            const data = await res.json();
+
+            document.getElementById('video-list-panel').style.display = 'none';
+            document.getElementById('video-detail-panel').style.display = 'block';
+
+            document.getElementById('video-detail-title').innerText = data.title;
+            const started = data.started_at ? new Date(data.started_at).toLocaleString() : '-';
+            const ended = data.ended_at ? new Date(data.ended_at).toLocaleString() : '-';
+            document.getElementById('video-detail-meta').innerText =
+                `${data.video_id} • ${data.peak_count} peak • Max Z-Score ${data.max_z_score.toFixed(2)} • ${data.total_messages} chat • ${started} s/d ${ended}`;
+
+            const tbody = document.getElementById('minutes-table-body');
+            tbody.innerHTML = '';
+
+            const minutes = data.minutes || [];
+            if (minutes.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="8" style="color: var(--text-muted); text-align: center; padding: 24px;">Belum ada peak pada video ini.</td></tr>';
+                return;
+            }
+
+            minutes.forEach(m => {
+                const best = m.peaks.reduce((a, b) => (b.max_z_score > a.max_z_score ? b : a), m.peaks[0]);
+                const sSec = best.start_offset_seconds != null ? Math.floor(best.start_offset_seconds) : Math.floor(m.start_offset_seconds);
+                const eSec = best.end_offset_seconds != null ? Math.ceil(best.end_offset_seconds) : Math.ceil(m.end_offset_seconds);
+                const timeLabel = (best.video_start_time && best.video_end_time)
+                    ? `${best.video_start_time} - ${best.video_end_time}`
+                    : `${sSec}s - ${eSec}s`;
+
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td><strong>${m.minute_label}</strong></td>
+                    <td>${sSec}s - ${eSec}s</td>
+                    <td><span class="badge">${m.peak_count}</span></td>
+                    <td>${m.max_z_score.toFixed(2)}</td>
+                    <td>${m.max_chat_velocity.toFixed(1)} msg/s</td>
+                    <td>${m.total_messages}</td>
+                    <td>${(m.highlight_keywords || []).join(', ') || '-'}</td>
+                    <td>
+                        <button style="padding: 6px 12px; font-size: 12px;" onclick="openClipModal('${data.video_id}', ${sSec}, ${eSec}, '${timeLabel}')">🎬 Review Clip</button>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
         }
 
-        function resetPeakFilters() {
-            document.getElementById('filter-video-id').value = '';
-            document.getElementById('filter-min-z').value = '';
-            document.getElementById('filter-min-velocity').value = '';
-            document.getElementById('filter-keyword').value = '';
-            document.getElementById('filter-sort-by').value = 'created_at';
+        function closeVideoDetail() {
+            document.getElementById('video-detail-panel').style.display = 'none';
+            document.getElementById('video-list-panel').style.display = 'block';
+        }
+
+        function applyVideoFilters() {
+            loadVideoReports(1);
+        }
+
+        function resetVideoFilters() {
+            document.getElementById('filter-start-date').value = '';
+            document.getElementById('filter-end-date').value = '';
+            document.getElementById('filter-video-search').value = '';
+            document.getElementById('filter-sort-by').value = 'video_date';
             document.getElementById('filter-sort-order').value = 'desc';
-            loadPeakReports(1);
+            loadVideoReports(1);
         }
 
         function changePageSize() {
-            loadPeakReports(1);
+            loadVideoReports(1);
         }
 
-        function prevPeakPage() {
-            if (currentPeakPage > 1) {
-                loadPeakReports(currentPeakPage - 1);
+        function prevVideoPage() {
+            if (currentVideoPage > 1) {
+                loadVideoReports(currentVideoPage - 1);
             }
         }
 
-        function nextPeakPage() {
-            if (currentPeakPage < totalPeakPages) {
-                loadPeakReports(currentPeakPage + 1);
+        function nextVideoPage() {
+            if (currentVideoPage < totalVideoPages) {
+                loadVideoReports(currentVideoPage + 1);
             }
         }
 

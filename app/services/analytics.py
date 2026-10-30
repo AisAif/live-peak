@@ -7,12 +7,13 @@ from app.models.domain import ChatMessage, WindowStats
 from app.utils.stats_helpers import (
     calculate_baseline_center_scale,
     calculate_ewma_z_score,
-    calculate_window_z_score,
+    calculate_rolling_stats,
+    calculate_z_from_center_scale,
     update_cusum,
     update_ewma_mean,
     update_ewma_variance,
 )
-from app.utils.text_helpers import extract_top_keywords, extract_emojis
+from app.utils.text_helpers import extract_keywords_and_emojis
 
 
 class SlidingWindowAnalytics:
@@ -209,11 +210,13 @@ class SlidingWindowAnalytics:
         baseline_center, baseline_scale = calculate_baseline_center_scale(
             historical_velocities
         )
-        z_score = calculate_window_z_score(
-            chat_velocity,
-            historical_velocities,
-            method=self.z_score_method,
-            flat_anomaly_score=self.z_score_threshold + 1.0
+        flat_anomaly_score = self.z_score_threshold + 1.0
+        if self.z_score_method == "mad":
+            z_center, z_scale = baseline_center, baseline_scale
+        else:
+            z_center, z_scale = calculate_rolling_stats(historical_velocities)
+        z_score = calculate_z_from_center_scale(
+            chat_velocity, z_center, z_scale, flat_anomaly_score
         )
 
         # EWMA detector: compares the current value against the prior EWMA
@@ -261,10 +264,9 @@ class SlidingWindowAnalytics:
         is_peak = msg_count >= 3 and bool(peak_sources)
         peak_source = "+".join(peak_sources) if is_peak else None
 
-        # Extract top keywords and emojis
+        # Extract top keywords and emojis in a single pass
         raw_texts = [m.message for m in self.current_messages]
-        top_kw = extract_top_keywords(raw_texts, top_n=5)
-        emoji_count = sum(len(extract_emojis(m.message)) for m in self.current_messages)
+        top_kw, emoji_count = extract_keywords_and_emojis(raw_texts, top_n=5)
 
         stats = WindowStats(
             video_id=self.video_id,

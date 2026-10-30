@@ -1,4 +1,8 @@
+import asyncio
+import contextlib
+
 import httpx
+
 from app.core.config import settings
 from app.core.logger import logger
 from app.models.domain import PeakEvent
@@ -8,10 +12,68 @@ class NotificationService:
     """
     Service responsible for dispatching real-time peak event alerts
     to external Webhooks (Discord, Telegram, or generic HTTP Webhook endpoints).
+
+    Alerts are queued and delivered by a background worker so slow webhook
+    endpoints never block chat ingestion or window persistence.
     """
 
-    def __init__(self, webhook_url: str | None = None):
+    def __init__(self, webhook_url: str | None = None, queue_size: int = 1000):
         self.webhook_url = webhook_url
+        self.queue_size = queue_size
+        self._queue: asyncio.Queue[PeakEvent] | None = None
+        self._worker_task: asyncio.Task | None = None
+
+    async def start(self) -> None:
+        """Starts the background webhook delivery worker when configured."""
+        if not self.webhook_url:
+            return
+        if self._worker_task is not None and not self._worker_task.done():
+            return
+        self._queue = asyncio.Queue(maxsize=self.queue_size)
+        self._worker_task = asyncio.create_task(
+            self._worker(), name="notification-worker"
+        )
+        logger.info("Notification worker started.")
+
+    async def stop(self) -> None:
+        """Stops the delivery worker gracefully."""
+        if self._worker_task is not None and not self._worker_task.done():
+            self._worker_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._worker_task
+        self._worker_task = None
+        self._queue = None
+
+    def enqueue_peak_alert(self, peak: PeakEvent) -> bool:
+        """
+        Queues a peak alert without blocking the caller.
+
+        Returns False when notifications are disabled or the queue is full.
+        """
+        if not self.webhook_url or self._queue is None:
+            return False
+        try:
+            self._queue.put_nowait(peak)
+            return True
+        except asyncio.QueueFull:
+            logger.warning(
+                f"Notification queue is full; dropping peak alert for {peak.video_id}."
+            )
+            return False
+
+    async def _worker(self) -> None:
+        """Delivers queued alerts sequentially until cancelled."""
+        assert self._queue is not None
+        while True:
+            peak = await self._queue.get()
+            try:
+                await self.send_peak_alert(peak)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(f"Error delivering queued peak alert: {e}")
+            finally:
+                self._queue.task_done()
 
     async def send_peak_alert(self, peak: PeakEvent, webhook_url: str | None = None) -> bool:
         """Dispatches peak alert payload to configured Webhook URL."""

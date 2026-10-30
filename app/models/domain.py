@@ -63,6 +63,47 @@ class PaginatedPeakResponse(BaseModel):
     total_pages: int
 
 
+class VideoSummary(BaseModel):
+    """Aggregated highlight summary for a single video/stream."""
+    video_id: str
+    title: str
+    channel_id: str | None = None
+    is_live: bool = False
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    peak_count: int = 0
+    max_z_score: float = 0.0
+    total_messages: int = 0
+    last_peak_at: datetime | None = None
+
+
+class PaginatedVideoResponse(BaseModel):
+    """Paginated envelope for the video highlight list."""
+    items: list[VideoSummary]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+
+class PeakMinuteGroup(BaseModel):
+    """Peaks grouped into the video minute they occurred in."""
+    minute_index: int
+    minute_label: str
+    start_offset_seconds: float
+    end_offset_seconds: float
+    peak_count: int
+    max_z_score: float
+    max_chat_velocity: float
+    total_messages: int
+    highlight_keywords: list[str] = Field(default_factory=list)
+    peaks: list[PeakEvent] = Field(default_factory=list)
+
+
+class VideoDetailResponse(VideoSummary):
+    """Video metadata plus its peaks grouped per minute."""
+    minutes: list[PeakMinuteGroup] = Field(default_factory=list)
+
 
 class StreamInfo(BaseModel):
     """Represents a YouTube live stream target."""
