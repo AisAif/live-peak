@@ -81,6 +81,12 @@ def test_calculate_baseline_center_scale_falls_back_to_mean_std():
     assert scale > 0.0
 
 
+def test_calculate_baseline_center_scale_ignores_float_noise():
+    center, scale = calculate_baseline_center_scale([0.1] * 6)
+    assert center == pytest.approx(0.1)
+    assert scale == 0.0
+
+
 def test_update_ewma_mean_and_variance():
     mean = update_ewma_mean(None, 2.0, 0.5)
     assert mean == 2.0

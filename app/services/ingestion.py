@@ -1,9 +1,13 @@
 import asyncio
+import time
+from collections import deque
 from datetime import datetime, timezone
 from typing import Callable, Awaitable
 import pytchat
 from app.core.logger import logger
 from app.models.domain import ChatMessage
+
+CHATDATA_RECONNECT_DELAY = 2.0
 
 
 class ChatIngestionService:
@@ -23,11 +27,35 @@ class ChatIngestionService:
         self.max_reconnect_attempts = max_reconnect_attempts
         self.is_running = False
         self._chat = None
+        self._seen_message_ids: deque[str] = deque(maxlen=10_000)
+        self._seen_message_id_set: set[str] = set()
+
+    def _is_new_message(self, message_id: str | None) -> bool:
+        """Returns True once per message ID, evicting the oldest ID when full."""
+        if message_id is None:
+            return True
+        if message_id in self._seen_message_id_set:
+            return False
+        if len(self._seen_message_ids) == self._seen_message_ids.maxlen:
+            self._seen_message_id_set.discard(self._seen_message_ids.popleft())
+        self._seen_message_ids.append(message_id)
+        self._seen_message_id_set.add(message_id)
+        return True
 
     @staticmethod
     def _collect_items(chat) -> list:
-        """Drains available chat items; runs in a worker thread to avoid blocking."""
-        return list(chat.get().sync_items())
+        """
+        Drains available chat items; runs in a worker thread to avoid blocking.
+
+        Uses ``Chatdata.items`` directly instead of ``sync_items()`` because the
+        latter paces messages to the original broadcast timeline and can sleep
+        for days on long-running 24/7 streams.
+        """
+        chatdata = chat.get()
+        if chatdata is None:
+            return []
+        items = getattr(chatdata, "items", None)
+        return list(items) if items is not None else list(chatdata)
 
     async def start_listening(self) -> None:
         """
@@ -40,22 +68,31 @@ class ChatIngestionService:
         logger.info(f"Starting chat ingestion listener for video {self.video_id}...")
 
         while self.is_running and attempt < self.max_reconnect_attempts:
+            chat = None
+            connected_at = None
             try:
-                # Create pytchat async listener
                 chat = pytchat.create(video_id=self.video_id)
                 self._chat = chat
-                attempt = 0  # Reset attempt counter on successful connection
-                backoff_delay = 2.0
+                connected_at = time.monotonic()
 
                 logger.info(f"Connected to YouTube live chat stream: {self.video_id}")
 
                 while self.is_running and chat.is_alive():
                     # pytchat is synchronous and may block; drain it off the event loop.
                     items = await asyncio.to_thread(self._collect_items, chat)
+
+                    if time.monotonic() - connected_at >= 10.0:
+                        attempt = 0
+                        backoff_delay = 2.0
+
                     for item in items:
+                        message_id = getattr(item, "id", None)
+                        if not self._is_new_message(message_id):
+                            continue
+
                         chat_msg = ChatMessage(
                             video_id=self.video_id,
-                            message_id=getattr(item, "id", None),
+                            message_id=message_id,
                             author_name=item.author.name,
                             message=item.message,
                             timestamp=datetime.now(timezone.utc),
@@ -65,9 +102,24 @@ class ChatIngestionService:
                         if self.message_callback:
                             await self.message_callback(chat_msg)
 
-                if not chat.is_alive():
-                    logger.warning(f"Live chat connection died for video {self.video_id}. Reconnecting...")
+                if not self.is_running:
+                    break
 
+                chat.raise_for_status()
+                logger.warning(
+                    f"Live chat connection ended for video {self.video_id}. Reconnecting..."
+                )
+
+            except pytchat.ChatDataFinished:
+                if not self.is_running:
+                    break
+                # Continuation boundaries are normal on long-running streams;
+                # reconnect promptly without consuming the error retry budget.
+                logger.warning(
+                    f"Chat continuation ended for video {self.video_id}. Reconnecting..."
+                )
+                await asyncio.sleep(CHATDATA_RECONNECT_DELAY)
+                continue
             except Exception as e:
                 attempt += 1
                 logger.error(
@@ -76,9 +128,9 @@ class ChatIngestionService:
                 if not self.is_running:
                     break
 
-                # Exponential backoff retry (2s, 4s, 8s, 16s, max 30s)
-                await asyncio.sleep(backoff_delay)
-                backoff_delay = min(backoff_delay * 2, 30.0)
+            # Exponential backoff retry (2s, 4s, 8s, 16s, max 30s)
+            await asyncio.sleep(backoff_delay)
+            backoff_delay = min(backoff_delay * 2, 30.0)
 
         self.is_running = False
         logger.info(f"Chat ingestion listener stopped for video {self.video_id}.")

@@ -6,6 +6,7 @@ import numpy as np
 # Scale factor that makes the MAD a consistent estimator of the standard
 # deviation for normally distributed data.
 MAD_TO_STD_SCALE = 1.4826
+MIN_SCALE = 1e-12
 
 
 def calculate_z_score(current_val: float, baseline_mean: float, baseline_std: float) -> float:
@@ -15,7 +16,7 @@ def calculate_z_score(current_val: float, baseline_mean: float, baseline_std: fl
     Z = (x - mean) / std
     Returns 0.0 if standard deviation is 0 (to avoid division by zero).
     """
-    if baseline_std <= 0.0:
+    if baseline_std <= MIN_SCALE:
         return 0.0
     return float((current_val - baseline_mean) / baseline_std)
 
@@ -78,7 +79,7 @@ def calculate_z_from_center_scale(
     flat_anomaly_score: float = 3.0
 ) -> float:
     """Calculates a Z-score directly from a precomputed baseline center/scale."""
-    if scale > 0.0:
+    if scale > MIN_SCALE:
         return float((current_val - center) / scale)
     return 0.0 if current_val <= center else flat_anomaly_score
 
@@ -95,7 +96,7 @@ def calculate_robust_z_score(
     Z-score for normally distributed baselines. Returns 0.0 when the baseline
     MAD is 0 (callers should fall back to another estimator in that case).
     """
-    if baseline_mad <= 0.0:
+    if baseline_mad <= MIN_SCALE:
         return 0.0
     return float(
         (current_val - baseline_median) / (MAD_TO_STD_SCALE * baseline_mad)
@@ -124,17 +125,17 @@ def calculate_window_z_score(
 
     if method == "mad":
         center, scale = calculate_robust_stats(baseline_values)
-        if scale > 0.0:
+        if scale > MIN_SCALE:
             return calculate_robust_z_score(current_val, center, scale)
 
         # MAD is 0 (e.g. mostly identical windows): fall back to mean/std.
         mean, std = calculate_rolling_stats(baseline_values)
-        if std > 0.0:
+        if std > MIN_SCALE:
             return calculate_z_score(current_val, mean, std)
         return 0.0 if current_val <= center else flat_anomaly_score
 
     mean, std = calculate_rolling_stats(baseline_values)
-    if std > 0.0:
+    if std > MIN_SCALE:
         return calculate_z_score(current_val, mean, std)
     return 0.0 if current_val <= mean else flat_anomaly_score
 
@@ -148,9 +149,12 @@ def calculate_baseline_center_scale(baseline_values: list[float]) -> tuple[float
     """
     center, mad = calculate_robust_stats(baseline_values)
     scale = mad * MAD_TO_STD_SCALE
-    if scale > 0.0:
+    if scale > MIN_SCALE:
         return center, scale
-    return calculate_rolling_stats(baseline_values)
+    mean, std = calculate_rolling_stats(baseline_values)
+    if std > MIN_SCALE:
+        return mean, std
+    return center, 0.0
 
 
 def update_ewma_mean(
@@ -188,7 +192,7 @@ def calculate_ewma_z_score(
     flat_anomaly_score: float = 4.0
 ) -> float:
     """Calculates a Z-score of a value against the current EWMA baseline."""
-    if ewma_std <= 0.0:
+    if ewma_std <= MIN_SCALE:
         return 0.0 if current_val <= ewma_mean else flat_anomaly_score
     return (current_val - ewma_mean) / ewma_std
 
@@ -215,7 +219,7 @@ def update_cusum(
     Returns:
         tuple[new_cusum, alarm]
     """
-    if baseline_scale <= 0.0:
+    if baseline_scale <= MIN_SCALE:
         return 0.0, False
 
     drift = drift_sigma * baseline_scale
