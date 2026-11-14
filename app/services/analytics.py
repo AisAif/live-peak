@@ -1,11 +1,12 @@
 import math
-from collections import deque
+from collections import Counter, deque
 from datetime import datetime, timedelta, timezone
 from app.core.config import settings
 from app.core.logger import logger
 from app.models.domain import ChatMessage, WindowStats
 from app.utils.stats_helpers import (
     calculate_baseline_center_scale,
+    calculate_diversity_ratio,
     calculate_ewma_z_score,
     calculate_rolling_stats,
     calculate_z_from_center_scale,
@@ -13,7 +14,11 @@ from app.utils.stats_helpers import (
     update_ewma_mean,
     update_ewma_variance,
 )
-from app.utils.text_helpers import extract_keywords_and_emojis
+from app.utils.text_helpers import (
+    extract_contrastive_keywords,
+    select_sample_messages,
+    tokenize_keywords_and_emojis,
+)
 
 
 class SlidingWindowAnalytics:
@@ -35,6 +40,7 @@ class SlidingWindowAnalytics:
         z_score_threshold: float = settings.Z_SCORE_THRESHOLD,
         z_score_method: str = settings.Z_SCORE_METHOD,
         min_baseline_windows: int = 5,
+        min_unique_authors: int = settings.MIN_UNIQUE_AUTHORS_FOR_PEAK,
         enable_ewma_detection: bool = settings.ENABLE_EWMA_DETECTION,
         ewma_alpha: float = settings.EWMA_ALPHA,
         ewma_z_threshold: float = settings.EWMA_Z_THRESHOLD,
@@ -47,6 +53,7 @@ class SlidingWindowAnalytics:
         self.sliding_window_size = sliding_window_size
         self.z_score_threshold = z_score_threshold
         self.min_baseline_windows = min_baseline_windows
+        self.min_unique_authors = max(1, min_unique_authors)
 
         z_score_method = z_score_method.lower()
         if z_score_method not in {"mad", "std"}:
@@ -75,6 +82,11 @@ class SlidingWindowAnalytics:
 
         # Historical window stats queue (sliding window memory)
         self.history: deque[WindowStats] = deque(maxlen=self.sliding_window_size)
+        # Winsorized velocity baseline (prevents extreme peaks from polluting future baselines)
+        self.baseline_velocities: deque[float] = deque(maxlen=self.sliding_window_size)
+        # Rolling background word frequencies from non-peak windows for contrastive keyword extraction
+        self.background_term_history: deque[Counter[str]] = deque(maxlen=self.sliding_window_size)
+        self.background_term_counts: Counter[str] = Counter()
 
         # Online detector state
         self.ewma_mean: float | None = None
@@ -205,8 +217,8 @@ class SlidingWindowAnalytics:
             denominator = float(self.window_duration)
         chat_velocity = msg_count / denominator if denominator > 0 else 0.0
 
-        # Calculate baseline from history (excluding current window)
-        historical_velocities = [w.chat_velocity for w in self.history]
+        # Calculate baseline from winsorized history (excluding current window)
+        historical_velocities = list(self.baseline_velocities)
         baseline_center, baseline_scale = calculate_baseline_center_scale(
             historical_velocities
         )
@@ -219,8 +231,7 @@ class SlidingWindowAnalytics:
             chat_velocity, z_center, z_scale, flat_anomaly_score
         )
 
-        # EWMA detector: compares the current value against the prior EWMA
-        # baseline, then updates the online mean/variance for the next window.
+        # EWMA detector: compares the current value against the prior EWMA baseline
         if self.ewma_mean is None:
             ewma_z_score = 0.0
         else:
@@ -230,14 +241,6 @@ class SlidingWindowAnalytics:
                 math.sqrt(max(self.ewma_variance, 0.0)),
                 flat_anomaly_score=self.ewma_z_threshold + 1.0
             )
-
-        ewma_velocity = update_ewma_mean(
-            self.ewma_mean, chat_velocity, self.ewma_alpha
-        )
-        self.ewma_variance = update_ewma_variance(
-            self.ewma_variance, self.ewma_mean, chat_velocity, self.ewma_alpha
-        )
-        self.ewma_mean = ewma_velocity
 
         # CUSUM detector: accumulates persistent positive deviations from the
         # robust baseline and resets after an alarm.
@@ -251,7 +254,16 @@ class SlidingWindowAnalytics:
         )
         self.cusum_positive = 0.0 if cusum_alarm else cusum_score
 
-        # Peak detection requires minimum baseline history size for confidence
+        # Extract contrastive keywords, emojis, unique authors, and SuperChats in a single pass
+        raw_texts = [m.message for m in self.current_messages]
+        fg_counts, emoji_count = tokenize_keywords_and_emojis(raw_texts)
+        top_kw = extract_contrastive_keywords(fg_counts, self.background_term_counts, top_n=5)
+        unique_author_set = {m.author_name for m in self.current_messages if m.author_name}
+        unique_authors = len(unique_author_set)
+        diversity_ratio = calculate_diversity_ratio(unique_authors, msg_count)
+        superchat_count = sum(1 for m in self.current_messages if m.amount_str)
+
+        # Peak detection requires minimum baseline history and unique authors (anti-spam gate)
         has_baseline = len(self.history) >= self.min_baseline_windows
         peak_sources: list[str] = []
         if has_baseline and z_score >= self.z_score_threshold:
@@ -261,18 +273,61 @@ class SlidingWindowAnalytics:
         if has_baseline and self.enable_cusum_detection and cusum_alarm:
             peak_sources.append("cusum")
 
-        is_peak = msg_count >= 3 and bool(peak_sources)
+        is_peak = (
+            msg_count >= 3
+            and unique_authors >= self.min_unique_authors
+            and bool(peak_sources)
+        )
         peak_source = "+".join(peak_sources) if is_peak else None
 
-        # Extract top keywords and emojis in a single pass
-        raw_texts = [m.message for m in self.current_messages]
-        top_kw, emoji_count = extract_keywords_and_emojis(raw_texts, top_n=5)
+        sample_msgs = (
+            select_sample_messages(
+                [(m.author_name, m.message, bool(m.amount_str)) for m in self.current_messages],
+                top_kw,
+                limit=5,
+            )
+            if is_peak or (has_baseline and z_score >= settings.PEAK_HYSTERESIS_LOW_Z)
+            else []
+        )
+        if not is_peak and fg_counts:
+            if (
+                self.background_term_history.maxlen is not None
+                and len(self.background_term_history) == self.background_term_history.maxlen
+            ):
+                oldest_counts = self.background_term_history.popleft()
+                self.background_term_counts.subtract(oldest_counts)
+                self.background_term_counts += Counter()
+            self.background_term_history.append(fg_counts)
+            self.background_term_counts.update(fg_counts)
+
+        # Winsorize peak spikes before updating rolling/EWMA baselines to prevent self-pollution
+        if is_peak and has_baseline:
+            if z_scale > 0.0:
+                capped_velocity = min(chat_velocity, z_center + (self.z_score_threshold * z_scale))
+            else:
+                capped_velocity = min(chat_velocity, z_center)
+        else:
+            capped_velocity = chat_velocity
+
+        ewma_velocity = update_ewma_mean(
+            self.ewma_mean, capped_velocity, self.ewma_alpha
+        )
+        self.ewma_variance = update_ewma_variance(
+            self.ewma_variance, self.ewma_mean, capped_velocity, self.ewma_alpha
+        )
+        self.ewma_mean = ewma_velocity
+        self.baseline_velocities.append(capped_velocity)
 
         stats = WindowStats(
             video_id=self.video_id,
             window_start=start,
             window_end=end,
             message_count=msg_count,
+            unique_authors=unique_authors,
+            diversity_ratio=diversity_ratio,
+            superchat_count=superchat_count,
+            author_names=sorted(unique_author_set),
+            sample_messages=sample_msgs,
             chat_velocity=chat_velocity,
             emoji_count=emoji_count,
             top_keywords=top_kw,

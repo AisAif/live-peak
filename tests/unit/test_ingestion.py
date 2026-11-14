@@ -107,3 +107,81 @@ async def test_chatdata_finished_reconnects_without_duplicate_messages(monkeypat
 
     assert creates == 3
     assert seen == ["m1"]
+
+
+@pytest.mark.asyncio
+async def test_falls_back_to_chat_downloader_when_pytchat_fails(monkeypatch):
+    import app.services.ingestion as ingestion_module
+
+    service = ChatIngestionService("vid_fallback", max_reconnect_attempts=2)
+    received = []
+
+    async def callback(message):
+        received.append(message)
+        if len(received) >= 2:
+            service.is_running = False
+
+    service.message_callback = callback
+
+    def failing_pytchat(video_id):
+        raise ValueError("Cannot find channel id for video id")
+
+    class FakeDownloader:
+        def get_chat(self, url):
+            yield {"message_id": "c1", "author": {"name": "alice"}, "message": "GILA CLUTCH!"}
+            yield {"message_id": "c1", "author": {"name": "alice"}, "message": "duplicate"}
+            yield {
+                "message_id": "c2",
+                "author": {"name": "bob"},
+                "message": "gg",
+                "money": {"text": "IDR 50,000"},
+            }
+
+    monkeypatch.setattr(ingestion_module.pytchat, "create", failing_pytchat)
+    monkeypatch.setattr(ingestion_module, "ChatDownloader", FakeDownloader)
+
+    await service.start_listening()
+
+    assert len(received) == 2
+    assert received[0].author_name == "alice"
+    assert received[0].message == "GILA CLUTCH!"
+    assert received[1].author_name == "bob"
+    assert received[1].amount_str == "IDR 50,000"
+
+
+@pytest.mark.asyncio
+async def test_chat_downloader_uses_cookies_file_when_configured(monkeypatch, tmp_path):
+    import app.services.ingestion as ingestion_module
+
+    cookie_file = tmp_path / "cookies.txt"
+    cookie_file.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+
+    service = ChatIngestionService("vid_cookie", max_reconnect_attempts=1)
+    received = []
+    init_kwargs = {}
+
+    async def callback(message):
+        received.append(message)
+        service.is_running = False
+
+    service.message_callback = callback
+
+    class FakeCookieDownloader:
+        def __init__(self, **kwargs):
+            init_kwargs.update(kwargs)
+
+        def get_chat(self, url):
+            yield {"message_id": "ck1", "author": {"name": "alice"}, "message": "mantap"}
+
+    def fail_if_pytchat_called(video_id):
+        raise AssertionError("pytchat must be skipped when YOUTUBE_COOKIES_FILE exists")
+
+    monkeypatch.setattr(ingestion_module.settings, "YOUTUBE_COOKIES_FILE", str(cookie_file))
+    monkeypatch.setattr(ingestion_module.pytchat, "create", fail_if_pytchat_called)
+    monkeypatch.setattr(ingestion_module, "ChatDownloader", FakeCookieDownloader)
+
+    await service.start_listening()
+
+    assert init_kwargs == {"cookies": str(cookie_file)}
+    assert len(received) == 1
+    assert received[0].message == "mantap"

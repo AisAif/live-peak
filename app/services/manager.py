@@ -20,6 +20,9 @@ from app.services.ingestion import ChatIngestionService
 from app.services.analytics import SlidingWindowAnalytics
 from app.services.merger import PeakMerger
 from app.services.notification import notification_service
+from app.services.notifier import send_peak_webhook
+
+_BACKGROUND_TASKS: set[asyncio.Task] = set()
 
 
 def _insert_for(model):
@@ -97,6 +100,9 @@ class ActiveStreamWorker:
                     window_start=stats.window_start,
                     window_end=stats.window_end,
                     message_count=stats.message_count,
+                    unique_authors=stats.unique_authors,
+                    diversity_ratio=stats.diversity_ratio,
+                    superchat_count=stats.superchat_count,
                     chat_velocity=stats.chat_velocity,
                     emoji_count=stats.emoji_count,
                     top_keywords=stats.top_keywords,
@@ -135,7 +141,15 @@ class ActiveStreamWorker:
                     max_z_score=peak.max_z_score,
                     max_chat_velocity=peak.max_chat_velocity,
                     total_messages=peak.total_messages,
+                    highlight_score=peak.highlight_score,
+                    unique_authors=peak.unique_authors,
+                    diversity_ratio=peak.diversity_ratio,
+                    emoji_count=peak.emoji_count,
+                    superchat_count=peak.superchat_count,
+                    peak_sources=peak.peak_sources,
                     highlight_keywords=peak.highlight_keywords,
+                    sample_messages=peak.sample_messages,
+                    moment_category=peak.moment_category,
                     dedup_key=dedup_key
                 ).on_conflict_do_nothing(index_elements=["dedup_key"])
                 result = await session.execute(stmt)
@@ -152,6 +166,10 @@ class ActiveStreamWorker:
                 await session.commit()
                 if saved:
                     logger.info(f"Successfully saved Peak Event for video {self.video_id} to DB.")
+                    if settings.WEBHOOK_URL.strip():
+                        task = asyncio.create_task(send_peak_webhook(peak))
+                        _BACKGROUND_TASKS.add(task)
+                        task.add_done_callback(_BACKGROUND_TASKS.discard)
                 return saved
         except Exception as e:
             logger.error(f"Error persisting peak event for {self.video_id}: {e}")

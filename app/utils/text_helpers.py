@@ -1,3 +1,4 @@
+import math
 import re
 import logging
 from collections import Counter
@@ -84,23 +85,18 @@ def extract_emojis(text: str) -> list[str]:
     return EMOJI_PATTERN.findall(text)
 
 
-def extract_keywords_and_emojis(
-    messages: list[str], top_n: int = 5
-) -> tuple[list[str], int]:
+def tokenize_keywords_and_emojis(messages: list[str]) -> tuple[Counter[str], int]:
     """
-    Extracts top N meaningful keywords/emojis and the total emoji count in one pass.
-
-    Filters out active stopwords and short words (< 2 characters).
+    Tokenizes messages into meaningful keywords and emojis, returning term counts
+    and the total emoji count in a single pass.
     """
     words: list[str] = []
     emoji_count = 0
     for msg in messages:
-        # Extract emojis once and reuse them for both the count and keyword list.
         emojis = extract_emojis(msg)
         emoji_count += len(emojis)
         words.extend(emojis)
 
-        # Remove URLs, mentions, and punctuation before tokenizing
         clean_text = URL_PATTERN.sub(" ", msg)
         clean_text = MENTION_PATTERN.sub(" ", clean_text)
         clean_text = PUNCTUATION_PATTERN.sub(" ", clean_text).lower()
@@ -112,11 +108,159 @@ def extract_keywords_and_emojis(
             ):
                 words.append(token)
 
-    if not words:
-        return [], emoji_count
+    return Counter(words), emoji_count
 
-    counts = Counter(words)
+
+def extract_keywords_and_emojis(
+    messages: list[str], top_n: int = 5
+) -> tuple[list[str], int]:
+    """
+    Extracts top N meaningful keywords/emojis and the total emoji count in one pass.
+
+    Filters out active stopwords and short words (< 2 characters).
+    """
+    counts, emoji_count = tokenize_keywords_and_emojis(messages)
+    if not counts:
+        return [], emoji_count
     return [word for word, _ in counts.most_common(top_n)], emoji_count
+
+
+def extract_contrastive_keywords(
+    fg_counts: Counter[str],
+    bg_counts: Counter[str] | None = None,
+    top_n: int = 5,
+) -> list[str]:
+    """
+    Ranks foreground keywords by how strongly they burst relative to background
+    chat history, suppressing terms that are constantly present in normal chat.
+    """
+    if not fg_counts:
+        return []
+    if not bg_counts:
+        return [word for word, _ in fg_counts.most_common(top_n)]
+
+    fg_total = max(1, sum(fg_counts.values()))
+    bg_total = max(1, sum(bg_counts.values()))
+
+    scored: list[tuple[float, int, str]] = []
+    for word, fg_count in fg_counts.items():
+        fg_prob = (fg_count + 0.5) / (fg_total + 1.0)
+        bg_prob = (bg_counts.get(word, 0) + 0.5) / (bg_total + 1.0)
+        burst_score = fg_count * math.log1p(fg_prob / bg_prob)
+        scored.append((burst_score, fg_count, word))
+
+    scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return [word for _, _, word in scored[:top_n]]
+
+
+def select_sample_messages(
+    messages: list[tuple[str, str, bool]],
+    top_keywords: list[str],
+    limit: int = 5,
+) -> list[str]:
+    """
+    Selects up to `limit` representative, deduplicated chat quotes for a window/peak.
+    Each input tuple is (author_name, message_text, has_superchat).
+    """
+    if not messages or limit <= 0:
+        return []
+
+    kw_set = {k.lower() for k in top_keywords}
+    candidates: list[tuple[int, int, str, str, str]] = []
+    for idx, (author, text, has_superchat) in enumerate(messages):
+        clean = " ".join(text.split())
+        without_noise = MENTION_PATTERN.sub("", URL_PATTERN.sub("", clean)).strip()
+        if len(without_noise) < 2 and not extract_emojis(clean):
+            continue
+        lowered = clean.lower()
+        norm_key = " ".join(PUNCTUATION_PATTERN.sub(" ", without_noise.lower()).split()) or lowered
+        score = 0
+        if has_superchat:
+            score += 3
+        score += sum(2 for kw in kw_set if kw in lowered)
+        if extract_emojis(clean):
+            score += 1
+        if 4 <= len(clean) <= 140:
+            score += 1
+        display_text = clean if len(clean) <= 140 else f"{clean[:137]}..."
+        candidates.append((score, -idx, author, norm_key, f"{author}: {display_text}"))
+
+    candidates.sort(reverse=True)
+    selected: list[str] = []
+    seen_authors: set[str] = set()
+    seen_texts: set[str] = set()
+    for _, _, author, lowered, formatted in candidates:
+        if lowered in seen_texts or author in seen_authors:
+            continue
+        selected.append(formatted)
+        seen_authors.add(author)
+        seen_texts.add(lowered)
+        if len(selected) >= limit:
+            break
+
+    # If distinct authors were fewer than `limit`, allow additional unique texts
+    if len(selected) < limit:
+        for _, _, _, lowered, formatted in candidates:
+            if lowered in seen_texts:
+                continue
+            selected.append(formatted)
+            seen_texts.add(lowered)
+            if len(selected) >= limit:
+                break
+
+    return selected
+
+
+_COMEDY_WORD_RE = re.compile(
+    r"\b(?:wkwk\w*|haha\w*|ngakak\w*|lol|lmao|kocak\w*|lucu\w*)\b",
+    re.IGNORECASE,
+)
+_COMEDY_EMOJIS = ("😂", "🤣")
+
+_SHOCK_WORD_RE = re.compile(
+    r"\b(?:anjay\w*|waduh|mati|fail\w*|oof|rip|monkas|kaget|wtf)\b",
+    re.IGNORECASE,
+)
+_SHOCK_EMOJIS = ("😱", "💀", "😭")
+
+_HYPE_WORD_RE = re.compile(
+    r"\b(?:gg\w*|pog\w*|mantap\w*|gila|keren|clutch|ace|goal|gol|win|menang)\b",
+    re.IGNORECASE,
+)
+_HYPE_EMOJIS = ("🔥", "🚀", "👏", "⚡")
+
+
+def _score_category_hits(text: str, word_re: re.Pattern[str], emojis: tuple[str, ...]) -> int:
+    return len(word_re.findall(text)) + sum(text.count(e) for e in emojis)
+
+
+def classify_moment_category(
+    keywords: list[str],
+    sample_messages: list[str] | None = None,
+    superchat_count: int = 0,
+) -> str:
+    """Classifies a highlight moment using word-boundary weighted scoring."""
+    kw_text = " ".join(keywords)
+    sample_text = " ".join(sample_messages or [])
+
+    scores = {
+        "Comedy / Ngakak": (
+            2 * _score_category_hits(kw_text, _COMEDY_WORD_RE, _COMEDY_EMOJIS)
+            + _score_category_hits(sample_text, _COMEDY_WORD_RE, _COMEDY_EMOJIS)
+        ),
+        "Shock / Fail": (
+            2 * _score_category_hits(kw_text, _SHOCK_WORD_RE, _SHOCK_EMOJIS)
+            + _score_category_hits(sample_text, _SHOCK_WORD_RE, _SHOCK_EMOJIS)
+        ),
+        "Hype / Clutch": (
+            2 * _score_category_hits(kw_text, _HYPE_WORD_RE, _HYPE_EMOJIS)
+            + _score_category_hits(sample_text, _HYPE_WORD_RE, _HYPE_EMOJIS)
+        ),
+        "Support / Donate": superchat_count * 2,
+    }
+
+    best_category, best_score = max(scores.items(), key=lambda item: item[1])
+    return best_category if best_score > 0 else "General Spike"
 
 
 def extract_top_keywords(messages: list[str], top_n: int = 5) -> list[str]:

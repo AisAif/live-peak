@@ -79,10 +79,10 @@ async def test_peak_is_persisted_with_keywords(tmp_path, monkeypatch):
     worker = ActiveStreamWorker(VIDEO_ID, started_at=NOW)
     worker.analytics.current_window_start = NOW
 
-    async def send(offset_seconds: float, text: str) -> None:
+    async def send(offset_seconds: float, text: str, author: str = "tester") -> None:
         await worker.handle_message(ChatMessage(
             video_id=VIDEO_ID,
-            author_name="tester",
+            author_name=author,
             message=text,
             timestamp=NOW + __import__("datetime").timedelta(seconds=offset_seconds),
         ))
@@ -90,7 +90,7 @@ async def test_peak_is_persisted_with_keywords(tmp_path, monkeypatch):
     for i in range(6):
         await send(i * 10 + 1, "halo biasa")
     for i in range(10):
-        await send(60 + i * 0.5, "GG mantap clutch")
+        await send(60 + i * 0.5, "GG mantap clutch", author=f"viewer_{i}")
     await send(120, "halo lagi")
 
     async with session_factory() as session:

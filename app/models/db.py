@@ -67,7 +67,17 @@ class PeakEventModel(Base):
     max_z_score: Mapped[float] = mapped_column(Float, nullable=False, index=True)
     max_chat_velocity: Mapped[float] = mapped_column(Float, nullable=False)
     total_messages: Mapped[int] = mapped_column(Integer, nullable=False)
+    highlight_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False, index=True)
+    unique_authors: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    diversity_ratio: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    emoji_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    superchat_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    peak_sources: Mapped[list] = mapped_column(JSON, default=list)
     highlight_keywords: Mapped[list] = mapped_column(JSON, default=list)
+    sample_messages: Mapped[list] = mapped_column(JSON, default=list)
+    moment_category: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
+    review_status: Mapped[str | None] = mapped_column(String(30), nullable=True, index=True)
+    review_note: Mapped[str | None] = mapped_column(String(500), nullable=True)
     dedup_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=get_utc_now, index=True
@@ -103,6 +113,9 @@ class WindowStatsModel(Base):
         DateTime(timezone=True), nullable=False, index=True
     )
     message_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    unique_authors: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    diversity_ratio: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    superchat_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     chat_velocity: Mapped[float] = mapped_column(Float, nullable=False)
     emoji_count: Mapped[int] = mapped_column(Integer, default=0)
     top_keywords: Mapped[list] = mapped_column(JSON, default=list)

@@ -3,6 +3,7 @@ uvicorn[standard]>=0.30.0
 pydantic>=2.10.0
 pydantic-settings>=2.6.0
 pytchat>=0.2.5
+chat-downloader>=0.2.8
 numpy>=2.1.0
 pandas>=2.2.3
 aiosqlite>=0.20.0

@@ -381,6 +381,32 @@ HTML_DASHBOARD_CONTENT = """<!DOCTYPE html>
                 <button style="padding: 8px 14px; background: #334155;" onclick="closeVideoDetail()">← Kembali ke daftar video</button>
                 <h3 id="video-detail-title" style="margin-top: 16px;"></h3>
                 <div id="video-detail-meta" style="color: var(--text-muted); font-size: 13px; margin-bottom: 12px;"></div>
+                <div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px;">
+                    <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+                        <label for="detail-category-filter" style="font-size: 13px; color: var(--text-muted);">Kategori:</label>
+                        <select id="detail-category-filter" onchange="renderVideoMinutes()" style="padding: 6px 10px; background: #1e293b; color: #fff; border: 1px solid var(--border-color); border-radius: 6px;">
+                            <option value="">Semua Kategori</option>
+                            <option value="Hype / Clutch">Hype / Clutch</option>
+                            <option value="Comedy / Ngakak">Comedy / Ngakak</option>
+                            <option value="Shock / Fail">Shock / Fail</option>
+                            <option value="Support / Donate">Support / Donate</option>
+                            <option value="General Spike">General Spike</option>
+                        </select>
+                        <label for="detail-review-filter" style="font-size: 13px; color: var(--text-muted);">Status:</label>
+                        <select id="detail-review-filter" onchange="renderVideoMinutes()" style="padding: 6px 10px; background: #1e293b; color: #fff; border: 1px solid var(--border-color); border-radius: 6px;">
+                            <option value="">Semua Status</option>
+                            <option value="valid">Valid</option>
+                            <option value="bookmarked">Bookmarked</option>
+                            <option value="false_positive">False Positive</option>
+                            <option value="unreviewed">Belum Direview</option>
+                        </select>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                        <button style="padding: 6px 12px; font-size: 12px; background: #334155;" onclick="copyChapters()">📋 Copy Chapters</button>
+                        <button style="padding: 6px 12px; font-size: 12px; background: #1e293b;" onclick="downloadExport('csv')">⬇ CSV</button>
+                        <button style="padding: 6px 12px; font-size: 12px; background: #1e293b;" onclick="downloadExport('json')">⬇ JSON</button>
+                    </div>
+                </div>
 
                 <table>
                     <thead>
@@ -388,10 +414,14 @@ HTML_DASHBOARD_CONTENT = """<!DOCTYPE html>
                             <th>Menit</th>
                             <th>Range</th>
                             <th>Jumlah Peak</th>
+                            <th>Highlight Score</th>
                             <th>Max Z-Score</th>
                             <th>Max Velocity</th>
                             <th>Total Chat</th>
+                            <th>Diversity</th>
+                            <th>Kategori</th>
                             <th>Keywords</th>
+                            <th>Sample Chat</th>
                             <th>Action</th>
                         </tr>
                     </thead>
@@ -607,9 +637,12 @@ HTML_DASHBOARD_CONTENT = """<!DOCTYPE html>
                 return;
             }
             const data = await res.json();
+            window._currentVideoDetail = data;
 
             document.getElementById('video-list-panel').style.display = 'none';
             document.getElementById('video-detail-panel').style.display = 'block';
+            document.getElementById('detail-category-filter').value = '';
+            document.getElementById('detail-review-filter').value = '';
 
             document.getElementById('video-detail-title').innerText = data.title;
             const started = data.started_at ? new Date(data.started_at).toLocaleString() : '-';
@@ -617,38 +650,144 @@ HTML_DASHBOARD_CONTENT = """<!DOCTYPE html>
             document.getElementById('video-detail-meta').innerText =
                 `${data.video_id} • ${data.peak_count} peak • Max Z-Score ${data.max_z_score.toFixed(2)} • ${data.total_messages} chat • ${started} s/d ${ended}`;
 
+            renderVideoMinutes();
+        }
+
+        function renderVideoMinutes() {
+            const data = window._currentVideoDetail;
+            if (!data) return;
+
             const tbody = document.getElementById('minutes-table-body');
             tbody.innerHTML = '';
 
-            const minutes = data.minutes || [];
-            if (minutes.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="8" style="color: var(--text-muted); text-align: center; padding: 24px;">Belum ada peak pada video ini.</td></tr>';
+            const selectedCategory = document.getElementById('detail-category-filter').value;
+            const selectedReview = document.getElementById('detail-review-filter').value;
+            const allMinutes = data.minutes || [];
+            if (allMinutes.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="12" style="color: var(--text-muted); text-align: center; padding: 24px;">Belum ada peak pada video ini.</td></tr>';
                 return;
             }
 
-            minutes.forEach(m => {
-                const best = m.peaks.reduce((a, b) => (b.max_z_score > a.max_z_score ? b : a), m.peaks[0]);
+            window._clipContextMap = {};
+            let renderedCount = 0;
+            allMinutes.forEach((m, idx) => {
+                const best = m.peaks.reduce(
+                    (a, b) => ((b.highlight_score || b.max_z_score) > (a.highlight_score || a.max_z_score) ? b : a),
+                    m.peaks[0]
+                );
+                if (selectedCategory && best.moment_category !== selectedCategory) {
+                    return;
+                }
+                if (selectedReview === 'unreviewed' && best.review_status) {
+                    return;
+                }
+                if (selectedReview && selectedReview !== 'unreviewed' && best.review_status !== selectedReview) {
+                    return;
+                }
+                renderedCount++;
+                const maxScore = Math.max(...m.peaks.map(p => p.highlight_score || 0));
+                const diversityPct = best.diversity_ratio != null ? `${Math.round(best.diversity_ratio * 100)}% (${best.unique_authors || 0} user)` : '-';
                 const sSec = best.start_offset_seconds != null ? Math.floor(best.start_offset_seconds) : Math.floor(m.start_offset_seconds);
                 const eSec = best.end_offset_seconds != null ? Math.ceil(best.end_offset_seconds) : Math.ceil(m.end_offset_seconds);
                 const timeLabel = (best.video_start_time && best.video_end_time)
                     ? `${best.video_start_time} - ${best.video_end_time}`
                     : `${sSec}s - ${eSec}s`;
+                const categoryBadge = best.moment_category
+                    ? `<span class="badge">${escapeHtml(best.moment_category)}</span>`
+                    : '-';
+                const samples = best.sample_messages || [];
+                const samplesHtml = samples.length > 0
+                    ? samples.slice(0, 3).map(s => `<div style="font-size: 11px; color: var(--text-muted); margin-bottom: 2px;">&ldquo;${escapeHtml(s)}&rdquo;</div>`).join('')
+                    : '-';
+                const keywordsHtml = (m.highlight_keywords || []).map(k => escapeHtml(k)).join(', ') || '-';
+                window._clipContextMap[idx] = {
+                    category: best.moment_category || '',
+                    samples: samples,
+                };
 
                 const tr = document.createElement('tr');
                 tr.innerHTML = `
-                    <td><strong>${m.minute_label}</strong></td>
+                    <td><strong>${escapeHtml(m.minute_label)}</strong></td>
                     <td>${sSec}s - ${eSec}s</td>
                     <td><span class="badge">${m.peak_count}</span></td>
+                    <td><span class="badge badge-success">${maxScore.toFixed(2)}</span></td>
                     <td>${m.max_z_score.toFixed(2)}</td>
                     <td>${m.max_chat_velocity.toFixed(1)} msg/s</td>
                     <td>${m.total_messages}</td>
-                    <td>${(m.highlight_keywords || []).join(', ') || '-'}</td>
+                    <td>${escapeHtml(diversityPct)}</td>
+                    <td>${categoryBadge}</td>
+                    <td>${keywordsHtml}</td>
+                    <td style="max-width: 260px;">${samplesHtml}</td>
                     <td>
-                        <button style="padding: 6px 12px; font-size: 12px;" onclick="openClipModal('${data.video_id}', ${sSec}, ${eSec}, '${timeLabel}')">🎬 Review Clip</button>
+                        <div style="display: flex; flex-direction: column; gap: 6px;">
+                            <button style="padding: 6px 12px; font-size: 12px;" onclick="openClipModal('${escapeHtml(data.video_id)}', ${sSec}, ${eSec}, '${escapeHtml(timeLabel)}', ${idx})">🎬 Review Clip</button>
+                            <div style="display: flex; gap: 4px;">
+                                <button title="Valid Highlight" style="padding: 4px 8px; font-size: 11px; background: ${best.review_status === 'valid' ? '#10b981' : '#1e293b'};" onclick="setPeakReview(${best.id}, '${best.review_status === 'valid' ? '' : 'valid'}')">👍</button>
+                                <button title="Bookmark" style="padding: 4px 8px; font-size: 11px; background: ${best.review_status === 'bookmarked' ? '#f59e0b' : '#1e293b'};" onclick="setPeakReview(${best.id}, '${best.review_status === 'bookmarked' ? '' : 'bookmarked'}')">⭐</button>
+                                <button title="False Positive" style="padding: 4px 8px; font-size: 11px; background: ${best.review_status === 'false_positive' ? '#ef4444' : '#1e293b'};" onclick="setPeakReview(${best.id}, '${best.review_status === 'false_positive' ? '' : 'false_positive'}')">❌</button>
+                            </div>
+                        </div>
                     </td>
                 `;
                 tbody.appendChild(tr);
             });
+            if (renderedCount === 0) {
+                tbody.innerHTML = '<tr><td colspan="12" style="color: var(--text-muted); text-align: center; padding: 24px;">Tidak ada momen yang sesuai dengan filter.</td></tr>';
+            }
+        }
+
+        async function setPeakReview(peakId, nextStatus) {
+            if (!peakId) return;
+            const res = await fetch(`/api/v1/peaks/${peakId}/review`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ review_status: nextStatus || null })
+            });
+            if (!res.ok) {
+                alert('Gagal menyimpan status review.');
+                return;
+            }
+            const updated = await res.json();
+            const data = window._currentVideoDetail;
+            if (data && data.minutes) {
+                data.minutes.forEach(m => {
+                    m.peaks.forEach(p => {
+                        if (p.id === peakId) {
+                            p.review_status = updated.review_status;
+                        }
+                    });
+                });
+            }
+            renderVideoMinutes();
+        }
+
+        function _buildExportQuery(fmt) {
+            const reviewFilter = document.getElementById('detail-review-filter').value;
+            const onlyValid = (reviewFilter === 'valid' || reviewFilter === 'bookmarked') ? '&only_valid=true' : '';
+            return `format=${encodeURIComponent(fmt)}${onlyValid}`;
+        }
+
+        async function copyChapters() {
+            const data = window._currentVideoDetail;
+            if (!data) return;
+            const res = await fetch(`/api/v1/videos/${encodeURIComponent(data.video_id)}/export?${_buildExportQuery('chapters')}`);
+            if (!res.ok) {
+                alert('Gagal mengambil YouTube Chapters.');
+                return;
+            }
+            const text = await res.text();
+            try {
+                await navigator.clipboard.writeText(text);
+                alert('YouTube Chapters berhasil disalin ke clipboard!');
+            } catch {
+                prompt('Salin YouTube Chapters:', text);
+            }
+        }
+
+        function downloadExport(fmt) {
+            const data = window._currentVideoDetail;
+            if (!data) return;
+            window.location.href = `/api/v1/videos/${encodeURIComponent(data.video_id)}/export?${_buildExportQuery(fmt)}`;
         }
 
         function closeVideoDetail() {
@@ -685,14 +824,25 @@ HTML_DASHBOARD_CONTENT = """<!DOCTYPE html>
             }
         }
 
-        function openClipModal(videoId, startSec, endSec, timeLabel) {
+        function openClipModal(videoId, startSec, endSec, timeLabel, ctxIdx) {
             const modal = document.getElementById('clip-modal');
             const iframe = document.getElementById('clip-iframe');
             const title = document.getElementById('modal-title');
             const meta = document.getElementById('modal-meta');
+            const samplesBox = document.getElementById('modal-samples');
 
+            const ctx = (window._clipContextMap && ctxIdx != null) ? window._clipContextMap[ctxIdx] : null;
+            const catText = ctx && ctx.category ? ` • Kategori: ${ctx.category}` : '';
             title.innerText = `🎬 Review Highlight Clip (${videoId})`;
-            meta.innerText = `Range: ${timeLabel} (Detik: ${startSec}s - ${endSec}s)`;
+            meta.innerText = `Range: ${timeLabel} (Detik: ${startSec}s - ${endSec}s)${catText}`;
+
+            if (samplesBox) {
+                const samples = (ctx && ctx.samples) ? ctx.samples : [];
+                samplesBox.innerHTML = samples.length > 0
+                    ? samples.map(s => `<div style="font-size: 12px; color: var(--text-muted);">&ldquo;${escapeHtml(s)}&rdquo;</div>`).join('')
+                    : '';
+                samplesBox.style.display = samples.length > 0 ? 'block' : 'none';
+            }
             
             iframe.src = `https://www.youtube.com/embed/${encodeURIComponent(videoId)}?start=${startSec}&end=${endSec}&autoplay=1`;
             modal.classList.add('active');
@@ -728,6 +878,7 @@ HTML_DASHBOARD_CONTENT = """<!DOCTYPE html>
             <div class="video-container">
                 <iframe id="clip-iframe" src="" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
             </div>
+            <div id="modal-samples" style="display: none; padding: 8px 16px; border-top: 1px solid var(--border); background: rgba(255,255,255,0.02);"></div>
             <div class="modal-footer">
                 <span id="modal-meta">Range: -</span>
                 <button style="padding: 6px 12px; font-size: 12px;" onclick="closeClipModal()">Tutup</button>

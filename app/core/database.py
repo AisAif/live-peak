@@ -86,6 +86,16 @@ def _run_sqlite_migrations(conn) -> None:
         "video_end_time": "VARCHAR(50)",
         "start_offset_seconds": "FLOAT",
         "end_offset_seconds": "FLOAT",
+        "highlight_score": "FLOAT NOT NULL DEFAULT 0",
+        "unique_authors": "INTEGER NOT NULL DEFAULT 0",
+        "diversity_ratio": "FLOAT NOT NULL DEFAULT 0",
+        "emoji_count": "INTEGER NOT NULL DEFAULT 0",
+        "superchat_count": "INTEGER NOT NULL DEFAULT 0",
+        "peak_sources": "JSON DEFAULT '[]'",
+        "sample_messages": "JSON DEFAULT '[]'",
+        "moment_category": "VARCHAR(50)",
+        "review_status": "VARCHAR(30)",
+        "review_note": "VARCHAR(500)",
     }
     for col_name, col_type in peak_additions.items():
         if col_name not in peak_columns:
@@ -94,6 +104,9 @@ def _run_sqlite_migrations(conn) -> None:
 
     window_columns = table_columns("window_stats")
     window_additions = {
+        "unique_authors": "INTEGER NOT NULL DEFAULT 0",
+        "diversity_ratio": "FLOAT NOT NULL DEFAULT 0",
+        "superchat_count": "INTEGER NOT NULL DEFAULT 0",
         "ewma_velocity": "FLOAT NOT NULL DEFAULT 0",
         "ewma_z_score": "FLOAT NOT NULL DEFAULT 0",
         "cusum_score": "FLOAT NOT NULL DEFAULT 0",
@@ -149,6 +162,12 @@ def _run_sqlite_migrations(conn) -> None:
         "ON peak_events(created_at)",
         "CREATE INDEX IF NOT EXISTS ix_peak_events_max_z_score "
         "ON peak_events(max_z_score)",
+        "CREATE INDEX IF NOT EXISTS ix_peak_events_highlight_score "
+        "ON peak_events(highlight_score)",
+        "CREATE INDEX IF NOT EXISTS ix_peak_events_moment_category "
+        "ON peak_events(moment_category)",
+        "CREATE INDEX IF NOT EXISTS ix_peak_events_review_status "
+        "ON peak_events(review_status)",
         "CREATE INDEX IF NOT EXISTS ix_window_stats_video_end "
         "ON window_stats(video_id, window_end)",
         "CREATE INDEX IF NOT EXISTS ix_window_stats_window_end "

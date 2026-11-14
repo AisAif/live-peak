@@ -2,6 +2,8 @@ import pytest
 
 from app.utils.stats_helpers import (
     calculate_baseline_center_scale,
+    calculate_composite_highlight_score,
+    calculate_diversity_ratio,
     calculate_ewma_z_score,
     calculate_z_score,
     calculate_rolling_stats,
@@ -125,6 +127,34 @@ def test_format_seconds_to_timestamp():
     assert format_seconds_to_timestamp(75) == "01:15"
     assert format_seconds_to_timestamp(3600) == "01:00:00"
     assert format_seconds_to_timestamp(3665) == "01:01:05"
+
+
+def test_calculate_diversity_ratio():
+    assert calculate_diversity_ratio(0, 0) == 0.0
+    assert calculate_diversity_ratio(1, 20) == 0.05
+    assert calculate_diversity_ratio(20, 20) == 1.0
+    assert calculate_diversity_ratio(25, 20) == 1.0
+
+
+def test_composite_highlight_score_prefers_organic_sustained_bursts():
+    spam_score = calculate_composite_highlight_score(
+        max_z_score=4.0,
+        total_messages=40,
+        unique_authors=1,
+        emoji_count=0,
+        duration_seconds=10.0,
+        superchat_count=0,
+    )
+    organic_score = calculate_composite_highlight_score(
+        max_z_score=4.0,
+        total_messages=40,
+        unique_authors=36,
+        emoji_count=20,
+        duration_seconds=30.0,
+        superchat_count=2,
+    )
+    assert organic_score > spam_score * 2
+
 
 
 

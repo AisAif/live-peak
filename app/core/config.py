@@ -18,10 +18,15 @@ class Settings(BaseSettings):
 
     # Peak Notification Webhook (Discord / Telegram / generic HTTP)
     WEBHOOK_URL: str = ""
+    WEBHOOK_MIN_HIGHLIGHT_SCORE: float = 0.0
 
-    # Analytics Parameters
+    # Optional Netscape cookies.txt path for authenticated chat-downloader sessions
+    YOUTUBE_COOKIES_FILE: str = ""
+
+    # Peak Detection Parameters
     Z_SCORE_THRESHOLD: float = 2.5
     Z_SCORE_METHOD: str = "mad"  # "mad" (robust median/MAD) or "std" (mean/std)
+    MIN_UNIQUE_AUTHORS_FOR_PEAK: int = 3  # Minimum unique authors required to trigger a peak
     WINDOW_DURATION_SECONDS: int = 10  # Aggregation window interval
     SLIDING_WINDOW_SIZE: int = 30  # Baseline window count (30 * 10s = 300s / 5 mins)
 
@@ -48,6 +53,7 @@ class Settings(BaseSettings):
 
     # Peak Merging & Time Padding Parameters
     PEAK_MERGE_GAP_SECONDS: int = 30  # Merge peaks if distance <= 30 seconds
+    PEAK_HYSTERESIS_LOW_Z: float = 1.2  # Lower Z-score bound to keep active peak open
     PEAK_PADDING_BEFORE_SECONDS: int = 15  # Pre-peak video clip offset
     PEAK_PADDING_AFTER_SECONDS: int = 15  # Post-peak video clip offset
 

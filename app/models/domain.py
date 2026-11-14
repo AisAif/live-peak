@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from typing import Literal
 from pydantic import BaseModel, Field
 
 
@@ -23,6 +24,11 @@ class WindowStats(BaseModel):
     window_start: datetime
     window_end: datetime
     message_count: int
+    unique_authors: int = 0
+    diversity_ratio: float = 0.0
+    superchat_count: int = 0
+    author_names: list[str] = Field(default_factory=list, exclude=True)
+    sample_messages: list[str] = Field(default_factory=list, exclude=True)
     chat_velocity: float  # Messages per second
     emoji_count: int = 0
     top_keywords: list[str] = Field(default_factory=list)
@@ -50,8 +56,24 @@ class PeakEvent(BaseModel):
     max_z_score: float
     max_chat_velocity: float
     total_messages: int
+    highlight_score: float = 0.0
+    unique_authors: int = 0
+    diversity_ratio: float = 0.0
+    emoji_count: int = 0
+    superchat_count: int = 0
+    peak_sources: list[str] = Field(default_factory=list)
     highlight_keywords: list[str] = Field(default_factory=list)
+    sample_messages: list[str] = Field(default_factory=list)
+    moment_category: str | None = None
+    review_status: Literal["valid", "false_positive", "bookmarked"] | None = None
+    review_note: str | None = None
     created_at: datetime = Field(default_factory=get_utc_now)
+
+
+class PeakReviewUpdate(BaseModel):
+    """Payload for updating a peak's human review status / bookmark."""
+    review_status: Literal["valid", "false_positive", "bookmarked"] | None = None
+    review_note: str | None = Field(default=None, max_length=500)
 
 
 class PaginatedPeakResponse(BaseModel):

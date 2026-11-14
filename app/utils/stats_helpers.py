@@ -228,4 +228,45 @@ def update_cusum(
     return new_cusum, new_cusum > threshold
 
 
+def calculate_diversity_ratio(unique_authors: int, message_count: int) -> float:
+    """
+    Calculates author participation diversity in [0.0, 1.0].
+
+    Low diversity indicates a few spammers/bots repeating messages; high diversity
+    indicates broad audience engagement.
+    """
+    if message_count <= 0 or unique_authors <= 0:
+        return 0.0
+    return round(min(1.0, unique_authors / message_count), 4)
+
+
+def calculate_composite_highlight_score(
+    max_z_score: float,
+    total_messages: int,
+    unique_authors: int,
+    emoji_count: int,
+    duration_seconds: float,
+    superchat_count: int = 0,
+    cumulative_z_score: float | None = None,
+) -> float:
+    """
+    Computes a composite highlight quality score combining peak intensity,
+    sustained AUC (when cumulative_z_score is provided), duration, anti-spam
+    author diversity, emoji density, and SuperChats.
+    """
+    diversity = calculate_diversity_ratio(unique_authors, total_messages)
+    emoji_density = min(1.0, emoji_count / max(total_messages, 1))
+    duration_factor = min(2.5, 1.0 + (max(duration_seconds, 0.0) / 60.0))
+    anti_spam_multiplier = 0.35 + (0.65 * diversity)
+
+    peak_z = max(0.0, max_z_score)
+    auc_z = max(0.0, cumulative_z_score) if cumulative_z_score is not None else peak_z
+    intensity = (0.5 * peak_z) + (0.5 * min(auc_z, peak_z * 3.0))
+
+    base_score = intensity * duration_factor * anti_spam_multiplier
+    engagement_bonus = (emoji_density * 1.5) + min(3.0, max(0, superchat_count) * 0.75)
+    return round(base_score + engagement_bonus, 2)
+
+
+
 

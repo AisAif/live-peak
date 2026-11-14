@@ -186,3 +186,109 @@ async def test_channels_api_endpoints():
         # Untrack channel
         res_del = await client.delete("/api/v1/channels/untrack/UC123456789")
         assert res_del.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_peak_review_and_video_export_endpoints():
+    import uuid
+    from datetime import datetime, timedelta, timezone
+    from app.core.database import async_session_factory
+    from app.models.db import PeakEventModel, StreamModel
+
+    now = datetime.now(timezone.utc)
+    test_video_id = f"vid_export_{uuid.uuid4().hex[:6]}"
+
+    async with async_session_factory() as session:
+        session.add(StreamModel(
+            video_id=test_video_id,
+            title="Exportable Stream",
+            channel_id="UC_EXPORT",
+            is_live=False,
+            started_at=now,
+        ))
+        p1 = PeakEventModel(
+            video_id=test_video_id,
+            start_time=now + timedelta(seconds=70),
+            peak_time=now + timedelta(seconds=75),
+            end_time=now + timedelta(seconds=80),
+            padded_start_time=now + timedelta(seconds=60),
+            padded_end_time=now + timedelta(seconds=95),
+            video_start_time="01:00",
+            video_end_time="01:35",
+            start_offset_seconds=60.0,
+            end_offset_seconds=95.0,
+            max_z_score=4.5,
+            max_chat_velocity=3.0,
+            total_messages=45,
+            highlight_score=7.5,
+            highlight_keywords=["clutch", "gg"],
+            sample_messages=["u1: GILA CLUTCH!"],
+            moment_category="Hype / Clutch",
+            dedup_key=f"exp_{uuid.uuid4().hex}",
+        )
+        p2 = PeakEventModel(
+            video_id=test_video_id,
+            start_time=now + timedelta(seconds=130),
+            peak_time=now + timedelta(seconds=135),
+            end_time=now + timedelta(seconds=140),
+            padded_start_time=now + timedelta(seconds=120),
+            padded_end_time=now + timedelta(seconds=155),
+            video_start_time="02:00",
+            video_end_time="02:35",
+            start_offset_seconds=120.0,
+            end_offset_seconds=155.0,
+            max_z_score=3.0,
+            max_chat_velocity=1.8,
+            total_messages=20,
+            highlight_score=4.2,
+            highlight_keywords=["spam"],
+            moment_category="General Spike",
+            dedup_key=f"exp_{uuid.uuid4().hex}",
+        )
+        session.add_all([p1, p2])
+        await session.commit()
+        await session.refresh(p1)
+        await session.refresh(p2)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        # Mark p1 as bookmarked and p2 as false_positive
+        r1 = await client.patch(
+            f"/api/v1/peaks/{p1.id}/review",
+            json={"review_status": "bookmarked", "review_note": "Best clip"},
+        )
+        assert r1.status_code == 200
+        assert r1.json()["review_status"] == "bookmarked"
+        assert r1.json()["review_note"] == "Best clip"
+
+        r2 = await client.patch(
+            f"/api/v1/peaks/{p2.id}/review",
+            json={"review_status": "false_positive"},
+        )
+        assert r2.status_code == 200
+
+        # Filter peaks by review_status
+        res_bm = await client.get(f"/api/v1/peaks/?video_id={test_video_id}&review_status=bookmarked")
+        assert res_bm.status_code == 200
+        assert res_bm.json()["total"] == 1
+        assert res_bm.json()["items"][0]["id"] == p1.id
+
+        # Export chapters (excludes false_positive by default)
+        res_chap = await client.get(f"/api/v1/videos/{test_video_id}/export?format=chapters")
+        assert res_chap.status_code == 200
+        assert "00:00:00 Stream Start" in res_chap.text
+        assert "01:00 [Hype / Clutch] clutch, gg" in res_chap.text
+        assert "02:00" not in res_chap.text
+
+        # Export CSV
+        res_csv = await client.get(f"/api/v1/videos/{test_video_id}/export?format=csv&only_valid=true")
+        assert res_csv.status_code == 200
+        assert "text/csv" in res_csv.headers["content-type"]
+        assert "Hype / Clutch" in res_csv.text
+        assert "General Spike" not in res_csv.text
+
+        # Export JSON
+        res_json = await client.get(f"/api/v1/videos/{test_video_id}/export?format=json")
+        assert res_json.status_code == 200
+        exported = res_json.json()
+        assert len(exported) == 1
+        assert exported[0]["id"] == p1.id

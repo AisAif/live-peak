@@ -1,15 +1,20 @@
+import csv
+import io
+import json
 import math
 from datetime import date, datetime, time, timedelta, timezone
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import PlainTextResponse, Response
 from sqlalchemy import and_, asc, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.endpoints.peaks import _to_peak_event
 from app.core.database import get_db_session
 from app.models.db import PeakEventModel, StreamModel
 from app.models.domain import (
     PaginatedVideoResponse,
-    PeakEvent,
     PeakMinuteGroup,
     VideoDetailResponse,
     VideoSummary,
@@ -31,28 +36,6 @@ def _as_utc(value: datetime | None) -> datetime | None:
 def _day_start(value: date) -> datetime:
     """Returns the UTC start-of-day for a date filter."""
     return datetime.combine(value, time.min, tzinfo=timezone.utc)
-
-
-def _to_peak_event(record: PeakEventModel) -> PeakEvent:
-    """Converts a peak ORM record into the API domain model."""
-    return PeakEvent(
-        id=record.id,
-        video_id=record.video_id,
-        start_time=record.start_time,
-        peak_time=record.peak_time,
-        end_time=record.end_time,
-        padded_start_time=record.padded_start_time,
-        padded_end_time=record.padded_end_time,
-        video_start_time=record.video_start_time,
-        video_end_time=record.video_end_time,
-        start_offset_seconds=record.start_offset_seconds,
-        end_offset_seconds=record.end_offset_seconds,
-        max_z_score=record.max_z_score,
-        max_chat_velocity=record.max_chat_velocity,
-        total_messages=record.total_messages,
-        highlight_keywords=record.highlight_keywords or [],
-        created_at=record.created_at,
-    )
 
 
 def _peak_offset(peak: PeakEventModel, stream: StreamModel | None) -> float:
@@ -245,4 +228,95 @@ async def get_video_detail(
             max(record.peak_time for record in records) if records else None
         ),
         minutes=minutes,
+    )
+
+
+def _sanitize_csv_cell(value: object) -> object:
+    """Prefixes potentially dangerous formula prefixes to prevent CSV injection."""
+    if isinstance(value, str) and value.startswith(("=", "+", "-", "@", "\t", "\r")):
+        return f"'{value}"
+    return value
+
+
+@router.get("/{video_id}/export")
+async def export_video_highlights(
+    video_id: str,
+    format: Literal["chapters", "csv", "json"] = "chapters",
+    only_valid: bool = False,
+    exclude_false_positive: bool = True,
+    db: AsyncSession = Depends(get_db_session),
+):
+    """Exports detected highlight peaks for a video as YouTube Chapters, CSV, or JSON."""
+    stream = await db.get(StreamModel, video_id)
+    stmt = (
+        select(PeakEventModel)
+        .where(PeakEventModel.video_id == video_id)
+        .order_by(
+            asc(PeakEventModel.start_offset_seconds),
+            asc(PeakEventModel.peak_time),
+        )
+    )
+    records = list((await db.execute(stmt)).scalars().all())
+    if only_valid:
+        records = [r for r in records if r.review_status in ("valid", "bookmarked")]
+    elif exclude_false_positive:
+        records = [r for r in records if r.review_status != "false_positive"]
+
+    if format == "chapters":
+        lines = ["00:00:00 Stream Start"]
+        last_offset = 0.0
+        for r in records:
+            offset_sec = _peak_offset(r, stream)
+            if offset_sec - last_offset < 10.0:
+                continue
+            ts = format_seconds_to_timestamp(offset_sec)
+            cat = r.moment_category or "Highlight"
+            kws = ", ".join((r.highlight_keywords or [])[:4]) or "Chat Spike"
+            lines.append(f"{ts} [{cat}] {kws} (Score: {r.highlight_score:.2f})")
+            last_offset = offset_sec
+        return PlainTextResponse("\n".join(lines))
+
+    events = [_to_peak_event(r) for r in records]
+    if format == "json":
+        payload = json.dumps([e.model_dump(mode="json") for e in events], indent=2)
+        return Response(
+            content=payload,
+            media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="{video_id}_highlights.json"'},
+        )
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow([
+        "id", "video_id", "video_start_time", "video_end_time",
+        "start_offset_seconds", "end_offset_seconds", "moment_category",
+        "highlight_score", "max_z_score", "max_chat_velocity",
+        "total_messages", "unique_authors", "review_status",
+        "highlight_keywords", "sample_messages",
+    ])
+    for e in events:
+        writer.writerow([
+            _sanitize_csv_cell(v)
+            for v in (
+                e.id,
+                e.video_id,
+                e.video_start_time or "",
+                e.video_end_time or "",
+                e.start_offset_seconds if e.start_offset_seconds is not None else "",
+                e.end_offset_seconds if e.end_offset_seconds is not None else "",
+                e.moment_category or "",
+                e.highlight_score,
+                e.max_z_score,
+                e.max_chat_velocity,
+                e.total_messages,
+                e.unique_authors,
+                e.review_status or "",
+                "; ".join(e.highlight_keywords),
+                " | ".join(e.sample_messages),
+            )
+        ])
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{video_id}_highlights.csv"'},
     )

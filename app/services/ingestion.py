@@ -1,9 +1,16 @@
 import asyncio
+import os
+import threading
 import time
 from collections import deque
 from datetime import datetime, timezone
 from typing import Callable, Awaitable
 import pytchat
+try:
+    from chat_downloader import ChatDownloader
+except ImportError:  # pragma: no cover - optional fallback in minimal test envs
+    ChatDownloader = None
+from app.core.config import settings
 from app.core.logger import logger
 from app.models.domain import ChatMessage
 
@@ -57,6 +64,102 @@ class ChatIngestionService:
         items = getattr(chatdata, "items", None)
         return list(items) if items is not None else list(chatdata)
 
+    async def _stream_with_chat_downloader(self) -> None:
+        """Fallback live chat reader using chat-downloader when pytchat fails."""
+        if ChatDownloader is None:
+            raise RuntimeError("chat-downloader is not installed")
+
+        url = f"https://www.youtube.com/watch?v={self.video_id}"
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue[tuple[str, object]] = asyncio.Queue()
+        stop_event = threading.Event()
+
+        def _push(kind: str, payload: object) -> None:
+            if loop.is_closed():
+                return
+            try:
+                loop.call_soon_threadsafe(queue.put_nowait, (kind, payload))
+            except RuntimeError:
+                pass
+
+        def _resolve_cookies_path() -> str | None:
+            cookies_path = settings.YOUTUBE_COOKIES_FILE.strip()
+            if not cookies_path:
+                return None
+            if not os.path.isfile(cookies_path):
+                logger.warning(
+                    f"YOUTUBE_COOKIES_FILE '{cookies_path}' not found; "
+                    "continuing without cookies."
+                )
+                return None
+            return cookies_path
+
+        def _worker() -> None:
+            try:
+                cookies_path = _resolve_cookies_path()
+                downloader = (
+                    ChatDownloader(cookies=cookies_path)
+                    if cookies_path
+                    else ChatDownloader()
+                )
+                chat_iter = downloader.get_chat(url)
+                for item in chat_iter:
+                    if stop_event.is_set() or not self.is_running:
+                        break
+                    _push("item", item)
+            except Exception as exc:
+                if not stop_event.is_set():
+                    _push("error", exc)
+            finally:
+                _push("done", None)
+
+        worker_thread = threading.Thread(
+            target=_worker,
+            name=f"chat-dl-{self.video_id}",
+            daemon=True,
+        )
+        worker_thread.start()
+        logger.info(f"Connected to YouTube live chat via chat-downloader: {self.video_id}")
+
+        try:
+            while self.is_running:
+                try:
+                    kind, payload = await asyncio.wait_for(queue.get(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    continue
+
+                if kind == "done":
+                    break
+                if kind == "error":
+                    raise payload  # type: ignore[misc]
+
+                item = payload
+                if not isinstance(item, dict):
+                    continue
+                message_id = item.get("message_id")
+                if not self._is_new_message(message_id):
+                    continue
+                author_info = item.get("author")
+                author_name = (
+                    author_info.get("name")
+                    if isinstance(author_info, dict)
+                    else None
+                ) or "Unknown"
+                money_info = item.get("money")
+                amount_str = money_info.get("text") if isinstance(money_info, dict) else None
+                chat_msg = ChatMessage(
+                    video_id=self.video_id,
+                    message_id=message_id,
+                    author_name=author_name,
+                    message=item.get("message") or "",
+                    timestamp=datetime.now(timezone.utc),
+                    amount_str=amount_str,
+                )
+                if self.message_callback:
+                    await self.message_callback(chat_msg)
+        finally:
+            stop_event.set()
+
     async def start_listening(self) -> None:
         """
         Starts live chat ingestion loop. Handles automatic reconnection if stream drops.
@@ -71,7 +174,47 @@ class ChatIngestionService:
             chat = None
             connected_at = None
             try:
-                chat = pytchat.create(video_id=self.video_id)
+                use_cookies_directly = bool(
+                    settings.YOUTUBE_COOKIES_FILE.strip()
+                    and os.path.isfile(settings.YOUTUBE_COOKIES_FILE.strip())
+                    and ChatDownloader is not None
+                )
+                if use_cookies_directly:
+                    connected_at = time.monotonic()
+                    await self._stream_with_chat_downloader()
+                    if not self.is_running:
+                        break
+                    if time.monotonic() - connected_at >= 10.0:
+                        attempt = 0
+                        backoff_delay = 2.0
+                    logger.warning(
+                        f"chat-downloader stream ended for {self.video_id}. Reconnecting..."
+                    )
+                    await asyncio.sleep(CHATDATA_RECONNECT_DELAY)
+                    continue
+
+                try:
+                    chat = pytchat.create(video_id=self.video_id)
+                except Exception as pytchat_err:
+                    if ChatDownloader is None:
+                        raise
+                    logger.warning(
+                        f"pytchat failed for {self.video_id} ({pytchat_err}); "
+                        "falling back to chat-downloader."
+                    )
+                    connected_at = time.monotonic()
+                    await self._stream_with_chat_downloader()
+                    if not self.is_running:
+                        break
+                    if time.monotonic() - connected_at >= 10.0:
+                        attempt = 0
+                        backoff_delay = 2.0
+                    logger.warning(
+                        f"chat-downloader stream ended for {self.video_id}. Reconnecting..."
+                    )
+                    await asyncio.sleep(CHATDATA_RECONNECT_DELAY)
+                    continue
+
                 self._chat = chat
                 connected_at = time.monotonic()
 
