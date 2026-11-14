@@ -3,6 +3,10 @@ import re
 import logging
 from collections import Counter
 import httpx
+try:
+    import emoji as _emoji_pkg
+except ImportError:  # pragma: no cover - optional fallback in minimal test envs
+    _emoji_pkg = None
 
 logger = logging.getLogger("live_peak")
 
@@ -11,7 +15,7 @@ DEFAULT_STOPWORDS = {
     "yang", "dan", "di", "ke", "dari", "ini", "itu", "sama", "dengan", "untuk",
     "ada", "bisa", "gak", "ga", "ngga", "nggak", "tak", "tidak", "ya", "yah",
     "iya", "dong", "deh", "kan", "lah", "sih", "kok", "apa", "siapa", "bagaimana",
-    "gua", "lu", "gw", "eloe", "gw", "wkwk", "wkwkwk", "wkwkwkwk",
+    "gua", "lu", "gw", "eloe", "cuy", "nih", "tuh", "doang", "yg", "dg", "ok", "si", "ku", "mu",
     "the", "is", "a", "an", "and", "or", "to", "in", "on", "at", "for", "with",
     "this", "that", "it", "you", "me", "he", "she", "they", "we", "my", "your"
 }
@@ -81,7 +85,23 @@ async def fetch_remote_stopwords() -> set[str]:
 
 
 def extract_emojis(text: str) -> list[str]:
-    """Extracts all emojis present in a text string."""
+    """Extracts all emojis (grouped into contiguous runs) present in a text string."""
+    if _emoji_pkg is not None:
+        matches = _emoji_pkg.emoji_list(text)
+        if not matches:
+            return []
+        runs: list[str] = []
+        cur_start = matches[0]["match_start"]
+        cur_end = matches[0]["match_end"]
+        for item in matches[1:]:
+            if item["match_start"] == cur_end:
+                cur_end = item["match_end"]
+            else:
+                runs.append(text[cur_start:cur_end])
+                cur_start = item["match_start"]
+                cur_end = item["match_end"]
+        runs.append(text[cur_start:cur_end])
+        return runs
     return EMOJI_PATTERN.findall(text)
 
 
@@ -102,7 +122,7 @@ def tokenize_keywords_and_emojis(messages: list[str]) -> tuple[Counter[str], int
         clean_text = PUNCTUATION_PATTERN.sub(" ", clean_text).lower()
         for token in clean_text.split():
             if (
-                len(token) > 2
+                len(token) >= 2
                 and not token.isdigit()
                 and token not in ACTIVE_STOPWORDS
             ):
@@ -229,6 +249,12 @@ _HYPE_WORD_RE = re.compile(
 )
 _HYPE_EMOJIS = ("🔥", "🚀", "👏", "⚡")
 
+_TECH_ISSUE_WORD_RE = re.compile(
+    r"\b(?:lag\w*|buffering|freeze|mute\w*|nosound|blackscreen|putus|patah|delay|dc)\b",
+    re.IGNORECASE,
+)
+_TECH_ISSUE_EMOJIS: tuple[str, ...] = ()
+
 
 def _score_category_hits(text: str, word_re: re.Pattern[str], emojis: tuple[str, ...]) -> int:
     return len(word_re.findall(text)) + sum(text.count(e) for e in emojis)
@@ -255,6 +281,10 @@ def classify_moment_category(
         "Hype / Clutch": (
             2 * _score_category_hits(kw_text, _HYPE_WORD_RE, _HYPE_EMOJIS)
             + _score_category_hits(sample_text, _HYPE_WORD_RE, _HYPE_EMOJIS)
+        ),
+        "Technical Issue": (
+            2 * _score_category_hits(kw_text, _TECH_ISSUE_WORD_RE, _TECH_ISSUE_EMOJIS)
+            + _score_category_hits(sample_text, _TECH_ISSUE_WORD_RE, _TECH_ISSUE_EMOJIS)
         ),
         "Support / Donate": superchat_count * 2,
     }

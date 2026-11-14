@@ -4,6 +4,14 @@ from datetime import datetime, timedelta, timezone
 from app.core.config import settings
 from app.core.logger import logger
 from app.models.domain import ChatMessage, WindowStats
+from app.services.semantic import SemanticAnalyzer, SemanticWindowResult, get_semantic_analyzer
+
+try:
+    from river import anomaly as river_anomaly
+    from river import preprocessing as river_preprocessing
+except ImportError:  # pragma: no cover - optional in minimal test envs
+    river_anomaly = None
+    river_preprocessing = None
 from app.utils.stats_helpers import (
     calculate_baseline_center_scale,
     calculate_diversity_ratio,
@@ -46,7 +54,11 @@ class SlidingWindowAnalytics:
         ewma_z_threshold: float = settings.EWMA_Z_THRESHOLD,
         enable_cusum_detection: bool = settings.ENABLE_CUSUM_DETECTION,
         cusum_drift_sigma: float = settings.CUSUM_DRIFT_SIGMA,
-        cusum_threshold_sigma: float = settings.CUSUM_THRESHOLD_SIGMA
+        cusum_threshold_sigma: float = settings.CUSUM_THRESHOLD_SIGMA,
+        enable_river_detection: bool = settings.ENABLE_RIVER_DETECTOR,
+        river_threshold: float = settings.RIVER_ANOMALY_THRESHOLD,
+        river_detector=None,
+        semantic_analyzer: SemanticAnalyzer | None = None,
     ):
         self.video_id = video_id
         self.window_duration = max(1, window_duration_seconds)
@@ -92,6 +104,31 @@ class SlidingWindowAnalytics:
         self.ewma_mean: float | None = None
         self.ewma_variance: float = 0.0
         self.cusum_positive: float = 0.0
+        self.enable_river_detection = enable_river_detection
+        self.river_threshold = river_threshold
+        if river_detector is not None:
+            self.river_detector = river_detector
+        elif enable_river_detection and river_anomaly is not None:
+            hst = river_anomaly.HalfSpaceTrees(
+                seed=42,
+                window_size=max(10, self.sliding_window_size),
+                n_trees=10,
+                height=5,
+                limits={
+                    "velocity": (0.0, 1.0),
+                    "diversity": (0.0, 1.0),
+                    "emoji_rate": (0.0, 1.0),
+                    "superchat": (0.0, 1.0),
+                },
+            )
+            self.river_detector = (
+                river_preprocessing.MinMaxScaler() | hst
+                if river_preprocessing is not None
+                else hst
+            )
+        else:
+            self.river_detector = None
+        self.semantic_analyzer = semantic_analyzer or get_semantic_analyzer()
 
     def _floor_to_window(self, ts: datetime) -> datetime:
         """Aligns a timestamp down to the nearest window boundary."""
@@ -265,6 +302,17 @@ class SlidingWindowAnalytics:
 
         # Peak detection requires minimum baseline history and unique authors (anti-spam gate)
         has_baseline = len(self.history) >= self.min_baseline_windows
+        river_score = 0.0
+        if self.river_detector is not None:
+            river_features = {
+                "velocity": chat_velocity,
+                "diversity": diversity_ratio,
+                "emoji_rate": emoji_count / max(msg_count, 1),
+                "superchat": float(superchat_count),
+            }
+            river_score = float(self.river_detector.score_one(river_features))
+            self.river_detector.learn_one(river_features)
+
         peak_sources: list[str] = []
         if has_baseline and z_score >= self.z_score_threshold:
             peak_sources.append("z")
@@ -272,6 +320,17 @@ class SlidingWindowAnalytics:
             peak_sources.append("ewma")
         if has_baseline and self.enable_cusum_detection and cusum_alarm:
             peak_sources.append("cusum")
+        has_river_warmup = len(self.history) >= max(
+            self.min_baseline_windows, self.sliding_window_size // 2
+        )
+        if (
+            has_river_warmup
+            and self.enable_river_detection
+            and self.river_detector is not None
+            and chat_velocity > baseline_center
+            and river_score >= self.river_threshold
+        ):
+            peak_sources.append("river")
 
         is_peak = (
             msg_count >= 3
@@ -280,15 +339,25 @@ class SlidingWindowAnalytics:
         )
         peak_source = "+".join(peak_sources) if is_peak else None
 
+        semantic_result = SemanticWindowResult()
+        if (
+            msg_count >= 5
+            and unique_authors >= self.min_unique_authors
+            and (is_peak or (has_baseline and (z_score >= 1.5 or ewma_z_score >= 1.5)))
+        ):
+            semantic_result = self.semantic_analyzer.analyze_window(raw_texts)
+
         sample_msgs = (
             select_sample_messages(
                 [(m.author_name, m.message, bool(m.amount_str)) for m in self.current_messages],
                 top_kw,
-                limit=5,
+                limit=8 if is_peak else 5,
             )
             if is_peak or (has_baseline and z_score >= settings.PEAK_HYSTERESIS_LOW_Z)
             else []
         )
+        if is_peak and len(sample_msgs) > 1:
+            sample_msgs = self.semantic_analyzer.select_diverse_samples_mmr(sample_msgs, limit=5)
         if not is_peak and fg_counts:
             if (
                 self.background_term_history.maxlen is not None
@@ -305,7 +374,8 @@ class SlidingWindowAnalytics:
             if z_scale > 0.0:
                 capped_velocity = min(chat_velocity, z_center + (self.z_score_threshold * z_scale))
             else:
-                capped_velocity = min(chat_velocity, z_center)
+                # Allow a flat baseline (z_scale == 0) to adapt gradually instead of locking at z_center forever
+                capped_velocity = z_center + 0.5 * max(0.0, chat_velocity - z_center)
         else:
             capped_velocity = chat_velocity
 
@@ -335,6 +405,9 @@ class SlidingWindowAnalytics:
             ewma_velocity=ewma_velocity,
             ewma_z_score=ewma_z_score,
             cusum_score=cusum_score,
+            river_score=round(river_score, 4),
+            semantic_convergence=semantic_result.convergence_score,
+            is_tech_issue=semantic_result.is_tech_issue,
             peak_source=peak_source,
             is_peak=is_peak
         )

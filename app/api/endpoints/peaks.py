@@ -3,17 +3,23 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, asc, func, and_
 from app.core.database import get_db_session
-from app.models.db import PeakEventModel, PeakKeywordModel
+from app.models.db import PeakEventModel, PeakKeywordModel, StreamModel, TrackedChannelModel
 from app.models.domain import PeakEvent, PaginatedPeakResponse, PeakReviewUpdate
 
 router = APIRouter(prefix="/peaks", tags=["Peak Highlights"])
 
 
-def _to_peak_event(r: PeakEventModel) -> PeakEvent:
+def _to_peak_event(
+    r: PeakEventModel,
+    channel_id: str | None = None,
+    channel_name: str | None = None,
+) -> PeakEvent:
     """Maps a PeakEventModel ORM row to the PeakEvent domain schema."""
     return PeakEvent(
         id=r.id,
         video_id=r.video_id,
+        channel_id=channel_id,
+        channel_name=channel_name,
         start_time=r.start_time,
         peak_time=r.peak_time,
         end_time=r.end_time,
@@ -45,14 +51,18 @@ def _to_peak_event(r: PeakEventModel) -> PeakEvent:
 async def get_video_peaks(video_id: str, db: AsyncSession = Depends(get_db_session)):
     """Retrieves all detected peak highlight events for a given video ID."""
     stmt = (
-        select(PeakEventModel)
+        select(PeakEventModel, StreamModel.channel_id, TrackedChannelModel.channel_name)
+        .outerjoin(StreamModel, StreamModel.video_id == PeakEventModel.video_id)
+        .outerjoin(TrackedChannelModel, TrackedChannelModel.channel_id == StreamModel.channel_id)
         .where(PeakEventModel.video_id == video_id)
         .order_by(desc(PeakEventModel.highlight_score), desc(PeakEventModel.max_z_score))
     )
-    result = await db.execute(stmt)
-    records = result.scalars().all()
+    rows = (await db.execute(stmt)).all()
 
-    return [_to_peak_event(r) for r in records]
+    return [
+        _to_peak_event(r, channel_id=ch_id, channel_name=ch_name)
+        for r, ch_id, ch_name in rows
+    ]
 
 
 @router.get("/", response_model=PaginatedPeakResponse)
@@ -111,17 +121,23 @@ async def get_all_recent_peaks(
     order_func = desc(col) if sort_order.lower() == "desc" else asc(col)
 
     offset = (page - 1) * page_size
-    stmt = select(PeakEventModel)
+    stmt = (
+        select(PeakEventModel, StreamModel.channel_id, TrackedChannelModel.channel_name)
+        .outerjoin(StreamModel, StreamModel.video_id == PeakEventModel.video_id)
+        .outerjoin(TrackedChannelModel, TrackedChannelModel.channel_id == StreamModel.channel_id)
+    )
     if conditions:
         stmt = stmt.where(and_(*conditions))
     stmt = stmt.order_by(order_func).offset(offset).limit(page_size)
 
-    result = await db.execute(stmt)
-    records = result.scalars().all()
+    rows = (await db.execute(stmt)).all()
 
     total_pages = math.ceil(total / page_size) if total > 0 else 1
 
-    items = [_to_peak_event(r) for r in records]
+    items = [
+        _to_peak_event(r, channel_id=ch_id, channel_name=ch_name)
+        for r, ch_id, ch_name in rows
+    ]
 
     return PaginatedPeakResponse(
         items=items,
@@ -148,4 +164,12 @@ async def update_peak_review(
         record.review_note = payload.review_note.strip() or None
     await db.commit()
     await db.refresh(record)
-    return _to_peak_event(record)
+    ch_row = (
+        await db.execute(
+            select(StreamModel.channel_id, TrackedChannelModel.channel_name)
+            .outerjoin(TrackedChannelModel, TrackedChannelModel.channel_id == StreamModel.channel_id)
+            .where(StreamModel.video_id == record.video_id)
+        )
+    ).first()
+    ch_id, ch_name = ch_row if ch_row else (None, None)
+    return _to_peak_event(record, channel_id=ch_id, channel_name=ch_name)

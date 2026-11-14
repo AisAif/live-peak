@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 from app.core.config import settings
 from app.core.logger import logger
 from app.models.domain import WindowStats, PeakEvent
+from app.services.semantic import SemanticAnalyzer, get_semantic_analyzer
 from app.utils.stats_helpers import (
     calculate_composite_highlight_score,
     calculate_diversity_ratio,
@@ -29,7 +30,8 @@ class PeakMerger:
         padding_before: int = settings.PEAK_PADDING_BEFORE_SECONDS,
         padding_after: int = settings.PEAK_PADDING_AFTER_SECONDS,
         stream_start: datetime | None = None,
-        stream_end: datetime | None = None
+        stream_end: datetime | None = None,
+        semantic_analyzer: SemanticAnalyzer | None = None,
     ):
         self.video_id = video_id
         self.merge_gap_seconds = merge_gap_seconds
@@ -38,6 +40,7 @@ class PeakMerger:
         self.padding_after = timedelta(seconds=padding_after)
         self.stream_start = stream_start
         self.stream_end = stream_end
+        self.semantic_analyzer = semantic_analyzer or get_semantic_analyzer()
 
         self.current_active_peak: PeakEvent | None = None
         self.accumulated_keywords: list[str] = []
@@ -46,6 +49,8 @@ class PeakMerger:
         self.accumulated_samples: list[str] = []
         self.accumulated_authors: set[str] = set()
         self.accumulated_z_score: float = 0.0
+        self.max_semantic_convergence: float = 0.0
+        self.has_tech_issue: bool = False
 
     def _clamp_time(self, value: datetime) -> datetime:
         """Clamps a timestamp to the known stream start/end boundaries."""
@@ -84,6 +89,21 @@ class PeakMerger:
         peak.diversity_ratio = calculate_diversity_ratio(
             peak.unique_authors, peak.total_messages
         )
+        peak.moment_category = classify_moment_category(
+            peak.highlight_keywords,
+            peak.sample_messages,
+            peak.superchat_count,
+        )
+        if peak.moment_category == "General Spike" and (peak.sample_messages or peak.highlight_keywords):
+            semantic_cat = self.semantic_analyzer.classify_moment(
+                peak.sample_messages or peak.highlight_keywords,
+                superchat_count=peak.superchat_count,
+            )
+            if semantic_cat is not None:
+                peak.moment_category = semantic_cat
+        if self.has_tech_issue and peak.moment_category == "General Spike":
+            peak.moment_category = "Technical Issue"
+
         duration_sec = max(0.0, (peak.end_time - peak.start_time).total_seconds())
         peak.highlight_score = calculate_composite_highlight_score(
             max_z_score=peak.max_z_score,
@@ -93,11 +113,8 @@ class PeakMerger:
             duration_seconds=duration_sec,
             superchat_count=peak.superchat_count,
             cumulative_z_score=self.accumulated_z_score,
-        )
-        peak.moment_category = classify_moment_category(
-            peak.highlight_keywords,
-            peak.sample_messages,
-            peak.superchat_count,
+            semantic_convergence=self.max_semantic_convergence,
+            is_tech_issue=(peak.moment_category == "Technical Issue" or self.has_tech_issue),
         )
 
     @staticmethod
@@ -125,6 +142,8 @@ class PeakMerger:
         self.accumulated_samples = list(window.sample_messages[:5])
         self.accumulated_authors = set(window.author_names)
         self.accumulated_z_score = max(0.0, window.z_score)
+        self.max_semantic_convergence = max(0.0, window.semantic_convergence)
+        self.has_tech_issue = bool(window.is_tech_issue)
         unique_authors = len(self.accumulated_authors) if self.accumulated_authors else window.unique_authors
         peak = PeakEvent(
             video_id=self.video_id,
@@ -160,6 +179,10 @@ class PeakMerger:
         else:
             peak.unique_authors += window.unique_authors
         self.accumulated_z_score += max(0.0, window.z_score)
+        self.max_semantic_convergence = max(
+            self.max_semantic_convergence, window.semantic_convergence
+        )
+        self.has_tech_issue = self.has_tech_issue or bool(window.is_tech_issue)
         peak.emoji_count += window.emoji_count
         peak.superchat_count += window.superchat_count
 
@@ -198,6 +221,17 @@ class PeakMerger:
 
         self._recompute_derived_metrics(peak)
 
+    def _reset_accumulator(self) -> None:
+        self.current_active_peak = None
+        self.accumulated_keywords = []
+        self.keyword_counts.clear()
+        self.accumulated_sources = []
+        self.accumulated_samples = []
+        self.accumulated_authors = set()
+        self.accumulated_z_score = 0.0
+        self.max_semantic_convergence = 0.0
+        self.has_tech_issue = False
+
     def process_window(self, window: WindowStats) -> PeakEvent | None:
         """
         Processes a WindowStats object.
@@ -221,13 +255,7 @@ class PeakMerger:
                 self._extend_peak(window)
             elif gap > self.merge_gap_seconds:
                 completed_peak = self.current_active_peak
-                self.current_active_peak = None
-                self.accumulated_keywords = []
-                self.keyword_counts.clear()
-                self.accumulated_sources = []
-                self.accumulated_samples = []
-                self.accumulated_authors = set()
-                self.accumulated_z_score = 0.0
+                self._reset_accumulator()
                 return completed_peak
 
         return None
@@ -239,20 +267,12 @@ class PeakMerger:
         """
         if end_time is not None:
             self.stream_end = end_time
-        else:
-            self.stream_end = datetime.now(timezone.utc)
 
         if self.current_active_peak is not None:
             completed_peak = self.current_active_peak
             completed_peak.padded_start_time = self._clamp_time(completed_peak.padded_start_time)
             completed_peak.padded_end_time = self._clamp_time(completed_peak.padded_end_time)
             self._recompute_derived_metrics(completed_peak)
-            self.current_active_peak = None
-            self.accumulated_keywords = []
-            self.keyword_counts.clear()
-            self.accumulated_sources = []
-            self.accumulated_samples = []
-            self.accumulated_authors = set()
-            self.accumulated_z_score = 0.0
+            self._reset_accumulator()
             return completed_peak
         return None

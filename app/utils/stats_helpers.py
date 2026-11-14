@@ -248,11 +248,13 @@ def calculate_composite_highlight_score(
     duration_seconds: float,
     superchat_count: int = 0,
     cumulative_z_score: float | None = None,
+    semantic_convergence: float = 0.0,
+    is_tech_issue: bool = False,
 ) -> float:
     """
     Computes a composite highlight quality score combining peak intensity,
     sustained AUC (when cumulative_z_score is provided), duration, anti-spam
-    author diversity, emoji density, and SuperChats.
+    author diversity, emoji density, SuperChats, and semantic convergence.
     """
     diversity = calculate_diversity_ratio(unique_authors, total_messages)
     emoji_density = min(1.0, emoji_count / max(total_messages, 1))
@@ -264,8 +266,15 @@ def calculate_composite_highlight_score(
     intensity = (0.5 * peak_z) + (0.5 * min(auc_z, peak_z * 3.0))
 
     base_score = intensity * duration_factor * anti_spam_multiplier
-    engagement_bonus = (emoji_density * 1.5) + min(3.0, max(0, superchat_count) * 0.75)
-    return round(base_score + engagement_bonus, 2)
+    engagement_bonus = (
+        (emoji_density * 1.5)
+        + min(3.0, max(0, superchat_count) * 0.75)
+        + min(1.0, max(0.0, semantic_convergence))
+    )
+    score = base_score + engagement_bonus
+    if is_tech_issue:
+        score *= 0.5
+    return round(score, 2)
 
 
 

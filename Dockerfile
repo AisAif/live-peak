@@ -3,7 +3,9 @@ FROM python:3.12-slim
 # Prevent Python from writing .pyc files and buffer stdout/stderr
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    TZ=Asia/Jakarta
+    TZ=Asia/Jakarta \
+    OMP_NUM_THREADS=4 \
+    FASTEMBED_CACHE_PATH=/app/data/fastembed_cache
 
 WORKDIR /app
 
@@ -20,8 +22,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application source code
 COPY app ./app
 
-# Create directory for persistent SQLite data
-RUN mkdir -p /app/data
+# Create directory for persistent SQLite data and FastEmbed ONNX cache
+RUN mkdir -p /app/data/fastembed_cache
 
 EXPOSE 8000
 

@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from app.core.config import settings
@@ -10,6 +11,7 @@ from app.api.router import main_router
 from app.services.auto_tracker import auto_tracker
 from app.services.notification import notification_service
 from app.services.retention import retention_service
+from app.services.semantic import get_semantic_analyzer
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -38,9 +40,14 @@ async def lifespan(app: FastAPI):
     # 5. Start non-blocking webhook notification worker
     await notification_service.start()
 
+    # 6. Pre-warm CPU semantic model in background thread (non-blocking)
+    prewarm_task = asyncio.create_task(get_semantic_analyzer().prewarm())
+
     yield
     
     # Shut-down cleanup
+    if not prewarm_task.done():
+        prewarm_task.cancel()
     await notification_service.stop()
     await retention_service.stop()
     await auto_tracker.stop()

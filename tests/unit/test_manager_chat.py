@@ -103,6 +103,6 @@ async def test_peak_is_persisted_with_keywords(tmp_path, monkeypatch):
     assert peaks[0].video_id == VIDEO_ID
     assert peaks[0].total_messages == 10
     assert peaks[0].max_z_score >= 3.0
-    assert sorted(keywords) == ["clutch", "mantap"]
+    assert sorted(keywords) == ["clutch", "gg", "mantap"]
 
     await engine.dispose()

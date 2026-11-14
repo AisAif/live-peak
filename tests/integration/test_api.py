@@ -193,12 +193,17 @@ async def test_peak_review_and_video_export_endpoints():
     import uuid
     from datetime import datetime, timedelta, timezone
     from app.core.database import async_session_factory
-    from app.models.db import PeakEventModel, StreamModel
+    from app.models.db import PeakEventModel, StreamModel, TrackedChannelModel
 
     now = datetime.now(timezone.utc)
     test_video_id = f"vid_export_{uuid.uuid4().hex[:6]}"
 
     async with async_session_factory() as session:
+        if await session.get(TrackedChannelModel, "UC_EXPORT") is None:
+            session.add(TrackedChannelModel(
+                channel_id="UC_EXPORT",
+                channel_name="Export Channel",
+            ))
         session.add(StreamModel(
             video_id=test_video_id,
             title="Exportable Stream",
@@ -271,6 +276,14 @@ async def test_peak_review_and_video_export_endpoints():
         assert res_bm.status_code == 200
         assert res_bm.json()["total"] == 1
         assert res_bm.json()["items"][0]["id"] == p1.id
+        assert res_bm.json()["items"][0]["channel_id"] == "UC_EXPORT"
+        assert res_bm.json()["items"][0]["channel_name"] == "Export Channel"
+
+        res_vid = await client.get(f"/api/v1/videos/?search=Exportable")
+        assert res_vid.status_code == 200
+        vid_items = [v for v in res_vid.json()["items"] if v["video_id"] == test_video_id]
+        assert len(vid_items) == 1
+        assert vid_items[0]["channel_name"] == "Export Channel"
 
         # Export chapters (excludes false_positive by default)
         res_chap = await client.get(f"/api/v1/videos/{test_video_id}/export?format=chapters")
@@ -292,3 +305,10 @@ async def test_peak_review_and_video_export_endpoints():
         exported = res_json.json()
         assert len(exported) == 1
         assert exported[0]["id"] == p1.id
+
+        # Audit endpoint (empty windows still returns clean 200 structure)
+        res_audit = await client.get(f"/api/v1/videos/{test_video_id}/audit")
+        assert res_audit.status_code == 200
+        audit_data = res_audit.json()
+        assert audit_data["video_id"] == test_video_id
+        assert audit_data["total_windows"] == 0

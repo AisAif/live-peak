@@ -36,9 +36,15 @@ class Settings(BaseSettings):
     EWMA_Z_THRESHOLD: float = 3.0
 
     # CUSUM Detection (detects small but persistent increases)
-    ENABLE_CUSUM_DETECTION: bool = True
+    ENABLE_CUSUM_DETECTION: bool = False
     CUSUM_DRIFT_SIGMA: float = 0.5  # Allowance before accumulating
     CUSUM_THRESHOLD_SIGMA: float = 5.0  # Alarm threshold
+
+    # Multivariate & Semantic CPU Intelligence (fastembed ONNX + river)
+    ENABLE_SEMANTIC_ANALYSIS: bool = True
+    SEMANTIC_MODEL_NAME: str = "intfloat/multilingual-e5-small"
+    ENABLE_RIVER_DETECTOR: bool = True
+    RIVER_ANOMALY_THRESHOLD: float = 0.78
 
     # Raw Chat Storage (opt-in; can grow quickly)
     ENABLE_RAW_CHAT_STORAGE: bool = False

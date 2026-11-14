@@ -9,6 +9,11 @@ services:
       - .env
     volumes:
       - ./data:/app/data
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     ports:
       # Hanya diexpose ke loopback host VPS untuk debugging lokal/curl
       - "127.0.0.1:8000:8000"

@@ -1,3 +1,4 @@
+import asyncio
 import csv
 import io
 import json
@@ -12,13 +13,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.endpoints.peaks import _to_peak_event
 from app.core.database import get_db_session
-from app.models.db import PeakEventModel, StreamModel
+from app.models.db import PeakEventModel, StreamModel, TrackedChannelModel, WindowStatsModel
 from app.models.domain import (
     PaginatedVideoResponse,
     PeakMinuteGroup,
+    RetrospectiveAuditResponse,
     VideoDetailResponse,
     VideoSummary,
 )
+from app.services.retrospective import run_retrospective_audit
 from app.utils.stats_helpers import format_seconds_to_timestamp
 
 router = APIRouter(prefix="/videos", tags=["Video Highlights"])
@@ -76,6 +79,7 @@ async def list_videos(
             PeakEventModel.video_id.label("video_id"),
             StreamModel.title.label("title"),
             StreamModel.channel_id.label("channel_id"),
+            TrackedChannelModel.channel_name.label("channel_name"),
             StreamModel.is_live.label("is_live"),
             StreamModel.started_at.label("started_at"),
             StreamModel.ended_at.label("ended_at"),
@@ -86,10 +90,12 @@ async def list_videos(
             video_date,
         )
         .outerjoin(StreamModel, StreamModel.video_id == PeakEventModel.video_id)
+        .outerjoin(TrackedChannelModel, TrackedChannelModel.channel_id == StreamModel.channel_id)
         .group_by(
             PeakEventModel.video_id,
             StreamModel.title,
             StreamModel.channel_id,
+            TrackedChannelModel.channel_name,
             StreamModel.is_live,
             StreamModel.started_at,
             StreamModel.ended_at,
@@ -134,6 +140,7 @@ async def list_videos(
             video_id=row.video_id,
             title=row.title or f"Video {row.video_id}",
             channel_id=row.channel_id,
+            channel_name=row.channel_name,
             is_live=bool(row.is_live),
             started_at=row.started_at,
             ended_at=row.ended_at,
@@ -162,6 +169,12 @@ async def get_video_detail(
 ):
     """Returns video metadata plus its peaks grouped by video minute."""
     stream = await db.get(StreamModel, video_id)
+    channel_id = stream.channel_id if stream else None
+    channel_name = None
+    if channel_id:
+        tracked_ch = await db.get(TrackedChannelModel, channel_id)
+        if tracked_ch:
+            channel_name = tracked_ch.channel_name
     stmt = (
         select(PeakEventModel)
         .where(PeakEventModel.video_id == video_id)
@@ -209,13 +222,17 @@ async def get_video_detail(
             ),
             total_messages=sum(record.total_messages for record in peak_records),
             highlight_keywords=keywords[:7],
-            peaks=[_to_peak_event(record) for _, record in entries],
+            peaks=[
+                _to_peak_event(record, channel_id=channel_id, channel_name=channel_name)
+                for _, record in entries
+            ],
         ))
 
     return VideoDetailResponse(
         video_id=video_id,
         title=(stream.title if stream else None) or f"Video {video_id}",
-        channel_id=stream.channel_id if stream else None,
+        channel_id=channel_id,
+        channel_name=channel_name,
         is_live=bool(stream.is_live) if stream else False,
         started_at=stream.started_at if stream else None,
         ended_at=stream.ended_at if stream else None,
@@ -248,6 +265,12 @@ async def export_video_highlights(
 ):
     """Exports detected highlight peaks for a video as YouTube Chapters, CSV, or JSON."""
     stream = await db.get(StreamModel, video_id)
+    channel_id = stream.channel_id if stream else None
+    channel_name = None
+    if channel_id:
+        tracked_ch = await db.get(TrackedChannelModel, channel_id)
+        if tracked_ch:
+            channel_name = tracked_ch.channel_name
     stmt = (
         select(PeakEventModel)
         .where(PeakEventModel.video_id == video_id)
@@ -319,4 +342,39 @@ async def export_video_highlights(
         content=buf.getvalue(),
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{video_id}_highlights.csv"'},
+    )
+
+
+@router.get("/{video_id}/audit", response_model=RetrospectiveAuditResponse)
+async def audit_video_patterns(
+    video_id: str,
+    db: AsyncSession = Depends(get_db_session),
+):
+    """Runs retrospective PELT regime-shift and Matrix Profile discord audit for a video."""
+    stream = await db.get(StreamModel, video_id)
+    channel_id = stream.channel_id if stream else None
+    channel_name = None
+    if channel_id:
+        tracked_ch = await db.get(TrackedChannelModel, channel_id)
+        if tracked_ch:
+            channel_name = tracked_ch.channel_name
+    win_stmt = (
+        select(WindowStatsModel)
+        .where(WindowStatsModel.video_id == video_id)
+        .order_by(asc(WindowStatsModel.window_start))
+    )
+    peak_stmt = (
+        select(PeakEventModel)
+        .where(PeakEventModel.video_id == video_id)
+        .order_by(asc(PeakEventModel.start_time))
+    )
+    window_rows = list((await db.execute(win_stmt)).scalars().all())
+    peak_rows = list((await db.execute(peak_stmt)).scalars().all())
+
+    return await asyncio.to_thread(
+        run_retrospective_audit,
+        video_id,
+        window_rows,
+        peak_rows,
+        stream.started_at if stream else None,
     )

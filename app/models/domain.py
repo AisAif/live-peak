@@ -36,6 +36,9 @@ class WindowStats(BaseModel):
     ewma_velocity: float = 0.0
     ewma_z_score: float = 0.0
     cusum_score: float = 0.0
+    river_score: float = 0.0
+    semantic_convergence: float = 0.0
+    is_tech_issue: bool = False
     peak_source: str | None = None
     is_peak: bool = False
 
@@ -44,6 +47,8 @@ class PeakEvent(BaseModel):
     """Represents a detected highlight/peak moment in a live stream."""
     id: int | None = None
     video_id: str
+    channel_id: str | None = None
+    channel_name: str | None = None
     start_time: datetime
     peak_time: datetime
     end_time: datetime
@@ -90,6 +95,7 @@ class VideoSummary(BaseModel):
     video_id: str
     title: str
     channel_id: str | None = None
+    channel_name: str | None = None
     is_live: bool = False
     started_at: datetime | None = None
     ended_at: datetime | None = None
@@ -125,6 +131,35 @@ class PeakMinuteGroup(BaseModel):
 class VideoDetailResponse(VideoSummary):
     """Video metadata plus its peaks grouped per minute."""
     minutes: list[PeakMinuteGroup] = Field(default_factory=list)
+
+
+class RegimeShiftPoint(BaseModel):
+    """Timestamp and offset where stream chat rhythm structurally shifted."""
+    window_index: int
+    timestamp: datetime
+    offset_seconds: float
+    time_label: str
+
+
+class ShapeDiscordWindow(BaseModel):
+    """Most structurally unusual chat waveform interval across the stream."""
+    start_index: int
+    end_index: int
+    start_offset_seconds: float
+    end_offset_seconds: float
+    time_label: str
+    discord_distance: float
+    matched_peak_id: int | None = None
+
+
+class RetrospectiveAuditResponse(BaseModel):
+    """Post-stream / retrospective PELT regime-shift and Matrix Profile audit."""
+    video_id: str
+    total_windows: int
+    ruptures_active: bool
+    stumpy_active: bool
+    regime_shifts: list[RegimeShiftPoint] = Field(default_factory=list)
+    shape_discords: list[ShapeDiscordWindow] = Field(default_factory=list)
 
 
 class StreamInfo(BaseModel):

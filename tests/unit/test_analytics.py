@@ -489,3 +489,57 @@ def test_peak_merger_prioritizes_highest_z_samples_and_keyword_frequency():
     assert len(final_peak.sample_messages) == 5
 
 
+def test_flat_baseline_adapts_instead_of_locking_winsorization():
+    analytics = SlidingWindowAnalytics(
+        video_id="vid_flat_adapt",
+        window_duration_seconds=10,
+        sliding_window_size=10,
+        z_score_threshold=2.5,
+        min_baseline_windows=5,
+        enable_ewma_detection=False,
+        enable_cusum_detection=False,
+        enable_river_detection=False,
+    )
+    t0 = analytics.current_window_start
+    # 5 silent windows -> flat zero baseline
+    for _ in range(5):
+        analytics.tick(t0 + timedelta(seconds=10))
+        t0 = analytics.current_window_start
+
+    # Steady 0.3 msg/s chat begins; baseline must adapt so later windows stop flagging as peaks
+    results = []
+    for w in range(10):
+        win_start = analytics.current_window_start
+        for a in range(3):
+            analytics.process_message(ChatMessage(
+                video_id="vid_flat_adapt",
+                author_name=f"u_{a}",
+                message="halo min",
+                timestamp=win_start + timedelta(seconds=a + 1),
+            ))
+        results.extend(analytics.tick(win_start + timedelta(seconds=10)))
+
+    assert results[-1].is_peak is False
+
+
+def test_peak_merger_flush_preserves_existing_stream_end():
+    start = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    known_end = start + timedelta(minutes=10)
+    merger = PeakMerger(video_id="vid_end", stream_start=start, stream_end=known_end)
+    w = WindowStats(
+        video_id="vid_end",
+        window_start=known_end - timedelta(seconds=10),
+        window_end=known_end,
+        message_count=10,
+        unique_authors=8,
+        chat_velocity=1.0,
+        z_score=4.0,
+        is_peak=True,
+    )
+    merger.process_window(w)
+    flushed = merger.flush()
+    assert flushed is not None
+    assert merger.stream_end == known_end
+    assert flushed.padded_end_time == known_end
+
+

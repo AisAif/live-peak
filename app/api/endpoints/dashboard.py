@@ -390,6 +390,7 @@ HTML_DASHBOARD_CONTENT = """<!DOCTYPE html>
                             <option value="Comedy / Ngakak">Comedy / Ngakak</option>
                             <option value="Shock / Fail">Shock / Fail</option>
                             <option value="Support / Donate">Support / Donate</option>
+                            <option value="Technical Issue">Technical Issue</option>
                             <option value="General Spike">General Spike</option>
                         </select>
                         <label for="detail-review-filter" style="font-size: 13px; color: var(--text-muted);">Status:</label>
@@ -402,11 +403,13 @@ HTML_DASHBOARD_CONTENT = """<!DOCTYPE html>
                         </select>
                     </div>
                     <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                        <button style="padding: 6px 12px; font-size: 12px; background: #0f766e;" onclick="runVideoAudit()">🔬 Audit Pola</button>
                         <button style="padding: 6px 12px; font-size: 12px; background: #334155;" onclick="copyChapters()">📋 Copy Chapters</button>
                         <button style="padding: 6px 12px; font-size: 12px; background: #1e293b;" onclick="downloadExport('csv')">⬇ CSV</button>
                         <button style="padding: 6px 12px; font-size: 12px; background: #1e293b;" onclick="downloadExport('json')">⬇ JSON</button>
                     </div>
                 </div>
+                <div id="video-audit-banner" style="display: none; margin-bottom: 12px; padding: 12px; border: 1px solid var(--border-color); border-radius: 8px; background: rgba(15, 118, 110, 0.12); font-size: 13px;"></div>
 
                 <table>
                     <thead>
@@ -611,7 +614,10 @@ HTML_DASHBOARD_CONTENT = """<!DOCTYPE html>
                             <strong>${escapeHtml(v.title)}</strong>${liveBadge}
                             <div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;"><code>${escapeHtml(v.video_id)}</code></div>
                         </td>
-                        <td><code>${escapeHtml(v.channel_id || '-')}</code></td>
+                        <td>
+                            <strong>${escapeHtml(v.channel_name || v.channel_id || '-')}</strong>
+                            ${v.channel_id ? `<div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;"><code>${escapeHtml(v.channel_id)}</code></div>` : ''}
+                        </td>
                         <td>${dateStr}</td>
                         <td><span class="badge">${v.peak_count}</span></td>
                         <td>${v.max_z_score.toFixed(2)}</td>
@@ -643,12 +649,21 @@ HTML_DASHBOARD_CONTENT = """<!DOCTYPE html>
             document.getElementById('video-detail-panel').style.display = 'block';
             document.getElementById('detail-category-filter').value = '';
             document.getElementById('detail-review-filter').value = '';
+            const auditBanner = document.getElementById('video-audit-banner');
+            if (auditBanner) {
+                auditBanner.style.display = 'none';
+                auditBanner.innerHTML = '';
+            }
 
             document.getElementById('video-detail-title').innerText = data.title;
             const started = data.started_at ? new Date(data.started_at).toLocaleString() : '-';
             const ended = data.ended_at ? new Date(data.ended_at).toLocaleString() : '-';
+            const channelLabel = data.channel_name
+                ? `${data.channel_name} (${data.channel_id || '-'})`
+                : (data.channel_id || '');
+            const channelPrefix = channelLabel ? `${channelLabel} • ` : '';
             document.getElementById('video-detail-meta').innerText =
-                `${data.video_id} • ${data.peak_count} peak • Max Z-Score ${data.max_z_score.toFixed(2)} • ${data.total_messages} chat • ${started} s/d ${ended}`;
+                `${channelPrefix}${data.video_id} • ${data.peak_count} peak • Max Z-Score ${data.max_z_score.toFixed(2)} • ${data.total_messages} chat • ${started} s/d ${ended}`;
 
             renderVideoMinutes();
         }
@@ -788,6 +803,35 @@ HTML_DASHBOARD_CONTENT = """<!DOCTYPE html>
             const data = window._currentVideoDetail;
             if (!data) return;
             window.location.href = `/api/v1/videos/${encodeURIComponent(data.video_id)}/export?${_buildExportQuery(fmt)}`;
+        }
+
+        async function runVideoAudit() {
+            const data = window._currentVideoDetail;
+            const banner = document.getElementById('video-audit-banner');
+            if (!data || !banner) return;
+            banner.style.display = 'block';
+            banner.innerText = 'Menjalankan audit PELT & Matrix Profile...';
+            const res = await fetch(`/api/v1/videos/${encodeURIComponent(data.video_id)}/audit`);
+            if (!res.ok) {
+                banner.innerText = 'Gagal menjalankan audit pola.';
+                return;
+            }
+            const audit = await res.json();
+            const shiftsHtml = (audit.regime_shifts || []).length > 0
+                ? audit.regime_shifts.map(s => `<span class="badge">${escapeHtml(s.time_label)}</span>`).join(' ')
+                : '<span style="color: var(--text-muted);">Belum terdeteksi perpindahan fase signifikan</span>';
+            const discordsHtml = (audit.shape_discords || []).length > 0
+                ? audit.shape_discords.map(d => {
+                    const sSec = Math.floor(d.start_offset_seconds);
+                    const eSec = Math.ceil(d.end_offset_seconds);
+                    return `<button style="padding: 4px 10px; font-size: 12px; margin: 2px 4px 2px 0;" onclick="openClipModal('${escapeHtml(data.video_id)}', ${sSec}, ${eSec}, '${escapeHtml(d.time_label)}')">▶ ${escapeHtml(d.time_label)} (dist: ${d.discord_distance.toFixed(2)})</button>`;
+                }).join('')
+                : '<span style="color: var(--text-muted);">Data window belum cukup (min. 18 window / 3 menit)</span>';
+            banner.innerHTML = `
+                <div><strong>Audit Retrospektif (${audit.total_windows} window)</strong></div>
+                <div style="margin-top: 6px;">Pergeseran Fase Stream: ${shiftsHtml}</div>
+                <div style="margin-top: 6px;">Pola Gelombang Paling Unik (Discord): ${discordsHtml}</div>
+            `;
         }
 
         function closeVideoDetail() {
