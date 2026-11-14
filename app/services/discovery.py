@@ -52,8 +52,15 @@ class StreamDiscoveryService:
                 if response.status_code == 200:
                     html = response.text
                     
-                    # Extract Channel ID
-                    id_match = re.search(r'"browseId":"(UC[a-zA-Z0-9_-]{22})"', html)
+                    # Extract Channel ID (prefer canonical/externalId over generic browseId)
+                    id_match = re.search(
+                        r'<link\s+rel="canonical"\s+href="https://www\.youtube\.com/channel/(UC[a-zA-Z0-9_-]{22})"',
+                        html,
+                    )
+                    if not id_match:
+                        id_match = re.search(r'"externalId":"(UC[a-zA-Z0-9_-]{22})"', html)
+                    if not id_match:
+                        id_match = re.search(r'"browseId":"(UC[a-zA-Z0-9_-]{22})"', html)
                     if not id_match:
                         id_match = re.search(r'href="https://www\.youtube\.com/channel/(UC[a-zA-Z0-9_-]{22})"', html)
                     
@@ -100,10 +107,13 @@ class StreamDiscoveryService:
 
                 html = response.text
 
-                # Extract canonical video_id from URL or page metadata
-                video_id_match = re.search(r'href="https://www\.youtube\.com/watch\?v=([a-zA-Z0-9_-]{11})"', html)
+                # Extract canonical watch video_id (avoid matching sidebar/featured links)
+                video_id_match = re.search(
+                    r'<link\s+rel="canonical"\s+href="https://www\.youtube\.com/watch\?v=([a-zA-Z0-9_-]{11})"',
+                    html,
+                )
                 if not video_id_match:
-                    video_id_match = re.search(r'"videoId":"([a-zA-Z0-9_-]{11})"', html)
+                    video_id_match = re.search(r"watch\?v=([a-zA-Z0-9_-]{11})", str(response.url))
 
                 if not video_id_match:
                     logger.info(f"No active live stream detected for channel {channel_id}")
@@ -111,11 +121,29 @@ class StreamDiscoveryService:
 
                 video_id = video_id_match.group(1)
 
-                # Check if stream is actually live
-                is_live = '"isLive":true' in html or '"isLiveContent":true' in html or 'LIVE' in html
+                # Verify the discovered video actually belongs to this channel
+                owner_match = (
+                    re.search(r'<meta\s+itemprop="identifier"\s+content="(UC[a-zA-Z0-9_-]{22})"', html)
+                    or re.search(r'"externalChannelId":"(UC[a-zA-Z0-9_-]{22})"', html)
+                    or re.search(r'"channelId":"(UC[a-zA-Z0-9_-]{22})"', html)
+                )
+                if owner_match and owner_match.group(1) != channel_id:
+                    logger.warning(
+                        f"Discovered video {video_id} belongs to channel {owner_match.group(1)}, "
+                        f"not requested channel {channel_id}; ignoring."
+                    )
+                    return None
+
+                # Strict live check (do not match generic 'LIVE' text or ended VOD 'isLiveContent')
+                is_live = '"isLive":true' in html or '"isLiveNow":true' in html
+                if not is_live:
+                    logger.info(f"Video {video_id} for channel {channel_id} is not currently live.")
+                    return None
 
                 # Extract video title
-                title_match = re.search(r'<title>(.*?)</title>', html)
+                title_match = re.search(r'<meta\s+property="og:title"\s+content="(.*?)"', html)
+                if not title_match:
+                    title_match = re.search(r'<title>(.*?)</title>', html)
                 title = title_match.group(1).replace(" - YouTube", "").strip() if title_match else f"Live Stream {video_id}"
 
                 return StreamInfo(
