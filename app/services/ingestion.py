@@ -1,10 +1,13 @@
 import asyncio
+import http.cookiejar
 import os
+import re
 import threading
 import time
 from collections import deque
 from datetime import datetime, timezone
 from typing import Callable, Awaitable
+import httpx
 import pytchat
 try:
     from chat_downloader import ChatDownloader
@@ -15,6 +18,25 @@ from app.core.logger import logger
 from app.models.domain import ChatMessage
 
 CHATDATA_RECONNECT_DELAY = 2.0
+_SENTINEL = object()
+_INNERTUBE_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/131.0.0.0 Safari/537.36"
+    ),
+    "Accept-Language": "en-US,en;q=0.9",
+}
+_INNERTUBE_CLIENT = {
+    "clientName": "WEB",
+    "clientVersion": "2.20241101.00.00",
+}
+_API_KEY_RE = re.compile(r'"INNERTUBE_API_KEY"\s*:\s*"([^"]+)"')
+_LIVE_CHAT_CONT_RE = re.compile(
+    r'"liveChatRenderer"\s*:\s*\{.*?"continuation"\s*:\s*"([^"]+)"',
+    re.DOTALL,
+)
+_ANY_CONT_RE = re.compile(r'"continuation"\s*:\s*"([^"]+)"')
 
 
 class ChatIngestionService:
@@ -64,6 +86,186 @@ class ChatIngestionService:
         items = getattr(chatdata, "items", None)
         return list(items) if items is not None else list(chatdata)
 
+    @staticmethod
+    def _resolve_cookies_path() -> str | None:
+        cookies_path = settings.YOUTUBE_COOKIES_FILE.strip()
+        if not cookies_path:
+            return None
+        if not os.path.isfile(cookies_path):
+            logger.warning(
+                f"YOUTUBE_COOKIES_FILE '{cookies_path}' not found; "
+                "continuing without cookies."
+            )
+            return None
+        return cookies_path
+
+    @staticmethod
+    def _load_httpx_cookies(cookies_path: str | None) -> httpx.Cookies:
+        cookies = httpx.Cookies()
+        if cookies_path:
+            jar = http.cookiejar.MozillaCookieJar(cookies_path)
+            try:
+                jar.load(ignore_discard=True, ignore_expires=True)
+                for cookie in jar:
+                    cookies.set(cookie.name, cookie.value or "", domain=cookie.domain, path=cookie.path)
+            except Exception as e:
+                logger.warning(f"Failed to load cookies from '{cookies_path}': {e}")
+        if "SOCS" not in cookies:
+            cookies.set("SOCS", "CAI", domain=".youtube.com", path="/")
+        return cookies
+
+    @staticmethod
+    def _extract_innertube_bootstrap(html: str) -> tuple[str | None, str | None]:
+        """Extracts INNERTUBE_API_KEY and initial live-chat continuation token from YouTube HTML."""
+        api_key_match = _API_KEY_RE.search(html)
+        api_key = api_key_match.group(1) if api_key_match else None
+
+        cont_match = _LIVE_CHAT_CONT_RE.search(html) or _ANY_CONT_RE.search(html)
+        continuation = cont_match.group(1) if cont_match else None
+        return api_key, continuation
+
+    @staticmethod
+    def _extract_runs_text(runs: list[dict] | None, simple_text: str | None = None) -> str:
+        if simple_text:
+            return simple_text
+        if not runs:
+            return ""
+        parts: list[str] = []
+        for run in runs:
+            if not isinstance(run, dict):
+                continue
+            if "text" in run:
+                parts.append(str(run["text"]))
+            elif "emoji" in run and isinstance(run["emoji"], dict):
+                emoji_obj = run["emoji"]
+                shortcuts = emoji_obj.get("shortcuts") or []
+                parts.append(str(shortcuts[0] if shortcuts else emoji_obj.get("emojiId", "")))
+        return "".join(parts).strip()
+
+    def _parse_innertube_actions(self, actions: list[dict]) -> list[ChatMessage]:
+        """Converts InnerTube get_live_chat action items into deduplicated ChatMessage objects."""
+        messages: list[ChatMessage] = []
+        renderer_keys = (
+            "liveChatTextMessageRenderer",
+            "liveChatPaidMessageRenderer",
+            "liveChatPaidStickerRenderer",
+            "liveChatMembershipItemRenderer",
+        )
+        for action in actions:
+            if not isinstance(action, dict):
+                continue
+            item = action.get("addChatItemAction", {}).get("item")
+            if not isinstance(item, dict):
+                continue
+            renderer = None
+            for key in renderer_keys:
+                if key in item and isinstance(item[key], dict):
+                    renderer = item[key]
+                    break
+            if renderer is None:
+                continue
+
+            message_id = renderer.get("id")
+            if not self._is_new_message(message_id):
+                continue
+
+            author_name = (
+                renderer.get("authorName", {}).get("simpleText")
+                or self._extract_runs_text(renderer.get("authorName", {}).get("runs"))
+                or "Unknown"
+            )
+            msg_obj = renderer.get("message") or renderer.get("headerSubtext") or {}
+            text = self._extract_runs_text(msg_obj.get("runs"), msg_obj.get("simpleText"))
+            amount_str = renderer.get("purchaseAmountText", {}).get("simpleText")
+
+            ts = datetime.now(timezone.utc)
+            ts_usec = renderer.get("timestampUsec")
+            if ts_usec:
+                try:
+                    ts = datetime.fromtimestamp(int(ts_usec) / 1_000_000, tz=timezone.utc)
+                except (ValueError, TypeError, OSError):
+                    pass
+
+            messages.append(
+                ChatMessage(
+                    video_id=self.video_id,
+                    message_id=message_id,
+                    author_name=author_name,
+                    message=text,
+                    timestamp=ts,
+                    amount_str=amount_str,
+                )
+            )
+        return messages
+
+    async def _stream_with_innertube(self, cookies_path: str | None = None) -> None:
+        """Native httpx YouTube InnerTube live chat poller (resilient fallback)."""
+        cookies = self._load_httpx_cookies(cookies_path)
+        bootstrap_urls = (
+            f"https://www.youtube.com/live_chat?is_popout=1&v={self.video_id}",
+            f"https://www.youtube.com/watch?v={self.video_id}",
+        )
+
+        async with httpx.AsyncClient(
+            headers=_INNERTUBE_HEADERS,
+            cookies=cookies,
+            follow_redirects=True,
+            timeout=15.0,
+        ) as client:
+            api_key: str | None = None
+            continuation: str | None = None
+            for url in bootstrap_urls:
+                resp = await client.get(url)
+                if resp.status_code != 200:
+                    continue
+                api_key, continuation = self._extract_innertube_bootstrap(resp.text)
+                if api_key and continuation:
+                    break
+
+            if not api_key or not continuation:
+                raise RuntimeError("Unable to extract InnerTube live chat continuation")
+
+            logger.info(f"Connected to YouTube live chat via InnerTube API: {self.video_id}")
+
+            endpoint = f"https://www.youtube.com/youtubei/v1/live_chat/get_live_chat?key={api_key}"
+            while self.is_running and continuation:
+                payload = {
+                    "context": {"client": _INNERTUBE_CLIENT},
+                    "continuation": continuation,
+                }
+                resp = await client.post(endpoint, json=payload)
+                resp.raise_for_status()
+                data = resp.json()
+
+                live_cont = data.get("continuationContents", {}).get("liveChatContinuation", {})
+                actions = live_cont.get("actions") or []
+                for chat_msg in self._parse_innertube_actions(actions):
+                    if self.message_callback:
+                        await self.message_callback(chat_msg)
+
+                next_cont: str | None = None
+                timeout_ms = 2000
+                for cont_entry in live_cont.get("continuations") or []:
+                    if not isinstance(cont_entry, dict):
+                        continue
+                    for cont_key in (
+                        "invalidationContinuationData",
+                        "timedContinuationData",
+                        "reloadContinuationData",
+                    ):
+                        if cont_key in cont_entry and isinstance(cont_entry[cont_key], dict):
+                            cdata = cont_entry[cont_key]
+                            next_cont = cdata.get("continuation")
+                            timeout_ms = int(cdata.get("timeoutMs") or timeout_ms)
+                            break
+                    if next_cont:
+                        break
+
+                continuation = next_cont
+                if continuation and self.is_running:
+                    delay = max(0.5, min(timeout_ms / 1000.0, 5.0))
+                    await asyncio.sleep(delay)
+
     async def _stream_with_chat_downloader(self) -> None:
         """Fallback live chat reader using chat-downloader when pytchat fails."""
         if ChatDownloader is None:
@@ -82,28 +284,21 @@ class ChatIngestionService:
             except RuntimeError:
                 pass
 
-        def _resolve_cookies_path() -> str | None:
-            cookies_path = settings.YOUTUBE_COOKIES_FILE.strip()
-            if not cookies_path:
-                return None
-            if not os.path.isfile(cookies_path):
-                logger.warning(
-                    f"YOUTUBE_COOKIES_FILE '{cookies_path}' not found; "
-                    "continuing without cookies."
-                )
-                return None
-            return cookies_path
-
         def _worker() -> None:
             try:
-                cookies_path = _resolve_cookies_path()
+                cookies_path = self._resolve_cookies_path()
                 downloader = (
                     ChatDownloader(cookies=cookies_path)
                     if cookies_path
                     else ChatDownloader()
                 )
-                chat_iter = downloader.get_chat(url)
-                for item in chat_iter:
+                iterator = iter(downloader.get_chat(url))
+                first_item = next(iterator, _SENTINEL)
+                if first_item is _SENTINEL:
+                    return
+                _push("connected", None)
+                _push("item", first_item)
+                for item in iterator:
                     if stop_event.is_set() or not self.is_running:
                         break
                     _push("item", item)
@@ -119,7 +314,6 @@ class ChatIngestionService:
             daemon=True,
         )
         worker_thread.start()
-        logger.info(f"Connected to YouTube live chat via chat-downloader: {self.video_id}")
 
         try:
             while self.is_running:
@@ -128,6 +322,9 @@ class ChatIngestionService:
                 except asyncio.TimeoutError:
                     continue
 
+                if kind == "connected":
+                    logger.info(f"Connected to YouTube live chat via chat-downloader: {self.video_id}")
+                    continue
                 if kind == "done":
                     break
                 if kind == "error":
@@ -160,6 +357,19 @@ class ChatIngestionService:
         finally:
             stop_event.set()
 
+    async def _run_fallback_stream(self, cookies_path: str | None = None) -> None:
+        """Tries chat-downloader first, then falls back to native InnerTube API poller."""
+        if ChatDownloader is not None:
+            try:
+                await self._stream_with_chat_downloader()
+                return
+            except Exception as dl_err:
+                logger.warning(
+                    f"chat-downloader failed for {self.video_id} ({dl_err}); "
+                    "falling back to native InnerTube API."
+                )
+        await self._stream_with_innertube(cookies_path=cookies_path)
+
     async def start_listening(self) -> None:
         """
         Starts live chat ingestion loop. Handles automatic reconnection if stream drops.
@@ -174,21 +384,17 @@ class ChatIngestionService:
             chat = None
             connected_at = None
             try:
-                use_cookies_directly = bool(
-                    settings.YOUTUBE_COOKIES_FILE.strip()
-                    and os.path.isfile(settings.YOUTUBE_COOKIES_FILE.strip())
-                    and ChatDownloader is not None
-                )
-                if use_cookies_directly:
+                cookies_path = self._resolve_cookies_path()
+                if cookies_path:
                     connected_at = time.monotonic()
-                    await self._stream_with_chat_downloader()
+                    await self._run_fallback_stream(cookies_path=cookies_path)
                     if not self.is_running:
                         break
                     if time.monotonic() - connected_at >= 10.0:
                         attempt = 0
                         backoff_delay = 2.0
                     logger.warning(
-                        f"chat-downloader stream ended for {self.video_id}. Reconnecting..."
+                        f"Fallback chat stream ended for {self.video_id}. Reconnecting..."
                     )
                     await asyncio.sleep(CHATDATA_RECONNECT_DELAY)
                     continue
@@ -196,21 +402,19 @@ class ChatIngestionService:
                 try:
                     chat = pytchat.create(video_id=self.video_id)
                 except Exception as pytchat_err:
-                    if ChatDownloader is None:
-                        raise
                     logger.warning(
                         f"pytchat failed for {self.video_id} ({pytchat_err}); "
-                        "falling back to chat-downloader."
+                        "falling back to chat-downloader / InnerTube."
                     )
                     connected_at = time.monotonic()
-                    await self._stream_with_chat_downloader()
+                    await self._run_fallback_stream()
                     if not self.is_running:
                         break
                     if time.monotonic() - connected_at >= 10.0:
                         attempt = 0
                         backoff_delay = 2.0
                     logger.warning(
-                        f"chat-downloader stream ended for {self.video_id}. Reconnecting..."
+                        f"Fallback chat stream ended for {self.video_id}. Reconnecting..."
                     )
                     await asyncio.sleep(CHATDATA_RECONNECT_DELAY)
                     continue

@@ -185,3 +185,95 @@ async def test_chat_downloader_uses_cookies_file_when_configured(monkeypatch, tm
     assert init_kwargs == {"cookies": str(cookie_file)}
     assert len(received) == 1
     assert received[0].message == "mantap"
+
+
+def test_extract_innertube_bootstrap_and_parse_actions():
+    html = (
+        '<script>ytcfg.set({"INNERTUBE_API_KEY":"AIzaTestKey123"});</script>'
+        '<script>var ytInitialData = {"contents":{"liveChatRenderer":'
+        '{"continuations":[{"invalidationContinuationData":{"continuation":"CONT_INIT_1"}}]}}};</script>'
+    )
+    api_key, cont = ChatIngestionService._extract_innertube_bootstrap(html)
+    assert api_key == "AIzaTestKey123"
+    assert cont == "CONT_INIT_1"
+
+    service = ChatIngestionService("vid_it")
+    actions = [
+        {
+            "addChatItemAction": {
+                "item": {
+                    "liveChatTextMessageRenderer": {
+                        "id": "it1",
+                        "authorName": {"simpleText": "budi"},
+                        "message": {
+                            "runs": [
+                                {"text": "ngakak "},
+                                {"emoji": {"shortcuts": [":joy:"]}},
+                            ]
+                        },
+                        "timestampUsec": "1700000000000000",
+                    }
+                }
+            }
+        },
+        {
+            "addChatItemAction": {
+                "item": {
+                    "liveChatPaidMessageRenderer": {
+                        "id": "it2",
+                        "authorName": {"simpleText": "sultan"},
+                        "message": {"runs": [{"text": "semangat!"}]},
+                        "purchaseAmountText": {"simpleText": "IDR 100,000"},
+                    }
+                }
+            }
+        },
+    ]
+    parsed = service._parse_innertube_actions(actions)
+    assert len(parsed) == 2
+    assert parsed[0].author_name == "budi"
+    assert parsed[0].message == "ngakak :joy:"
+    assert parsed[1].author_name == "sultan"
+    assert parsed[1].amount_str == "IDR 100,000"
+    # Duplicate action is skipped
+    assert service._parse_innertube_actions(actions) == []
+
+
+@pytest.mark.asyncio
+async def test_falls_back_to_innertube_when_chat_downloader_fails(monkeypatch):
+    import app.services.ingestion as ingestion_module
+
+    service = ChatIngestionService("vid_it_fb", max_reconnect_attempts=1)
+    received = []
+
+    async def callback(message):
+        received.append(message)
+        service.is_running = False
+
+    service.message_callback = callback
+
+    def failing_pytchat(video_id):
+        raise ValueError("pytchat failed")
+
+    class BrokenDownloader:
+        def get_chat(self, url):
+            raise RuntimeError("Unable to parse initial video data")
+
+    async def fake_innertube(cookies_path=None):
+        await callback(
+            ingestion_module.ChatMessage(
+                video_id="vid_it_fb",
+                message_id="it_ok",
+                author_name="viewer",
+                message="akhirnya masuk",
+            )
+        )
+
+    monkeypatch.setattr(ingestion_module.pytchat, "create", failing_pytchat)
+    monkeypatch.setattr(ingestion_module, "ChatDownloader", BrokenDownloader)
+    monkeypatch.setattr(service, "_stream_with_innertube", fake_innertube)
+
+    await service.start_listening()
+
+    assert len(received) == 1
+    assert received[0].message == "akhirnya masuk"
