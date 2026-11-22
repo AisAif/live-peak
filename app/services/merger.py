@@ -52,6 +52,12 @@ class PeakMerger:
         self.max_semantic_convergence: float = 0.0
         self.has_tech_issue: bool = False
 
+    def update_stream_start(self, stream_start: datetime) -> None:
+        """Updates the baseline stream start timestamp."""
+        if stream_start.tzinfo is None:
+            stream_start = stream_start.replace(tzinfo=timezone.utc)
+        self.stream_start = stream_start
+
     def _clamp_time(self, value: datetime) -> datetime:
         """Clamps a timestamp to the known stream start/end boundaries."""
         if self.stream_start is not None and value < self.stream_start:
@@ -66,8 +72,11 @@ class PeakMerger:
         """Calculates video timestamp strings and second offsets relative to stream start."""
         if self.stream_start is None:
             return None, None, None, None
-        start_sec = max(0.0, (start - self.stream_start).total_seconds())
-        end_sec = max(start_sec, (end - self.stream_start).total_seconds())
+        stream_start = self.stream_start if self.stream_start.tzinfo is not None else self.stream_start.replace(tzinfo=timezone.utc)
+        start_utc = start if start.tzinfo is not None else start.replace(tzinfo=timezone.utc)
+        end_utc = end if end.tzinfo is not None else end.replace(tzinfo=timezone.utc)
+        start_sec = max(0.0, (start_utc - stream_start).total_seconds())
+        end_sec = max(start_sec, (end_utc - stream_start).total_seconds())
         return (
             format_seconds_to_timestamp(start_sec),
             format_seconds_to_timestamp(end_sec),

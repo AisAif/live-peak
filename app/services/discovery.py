@@ -6,6 +6,37 @@ from app.core.logger import logger
 from app.models.domain import StreamInfo
 
 
+def parse_youtube_iso_datetime(value: str) -> datetime | None:
+    """Parses ISO 8601 datetime strings from YouTube HTML/JSON into timezone-aware UTC datetime."""
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except (ValueError, TypeError):
+        return None
+
+
+def extract_stream_start_time(html: str) -> datetime | None:
+    """
+    Extracts the official YouTube live broadcast start time from watch page HTML.
+    Looks for startTimestamp, actualStartTime, or schema.org startDate meta tags.
+    """
+    patterns = [
+        r'"startTimestamp"\s*:\s*"([^"]+)"',
+        r'"actualStartTime"\s*:\s*"([^"]+)"',
+        r'<meta\s+itemprop="startDate"\s+content="([^"]+)"',
+        r'<meta\s+property="og:video:release_date"\s+content="([^"]+)"',
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, html)
+        if match:
+            dt = parse_youtube_iso_datetime(match.group(1))
+            if dt:
+                return dt
+    return None
+
+
 class StreamDiscoveryService:
     """
     Service responsible for detecting active YouTube Live streams
@@ -146,14 +177,28 @@ class StreamDiscoveryService:
                     title_match = re.search(r'<title>(.*?)</title>', html)
                 title = title_match.group(1).replace(" - YouTube", "").strip() if title_match else f"Live Stream {video_id}"
 
+                actual_start = extract_stream_start_time(html)
+
                 return StreamInfo(
                     video_id=video_id,
                     channel_id=channel_id,
                     title=title,
                     is_live=is_live,
-                    started_at=datetime.now(timezone.utc)
+                    started_at=actual_start or datetime.now(timezone.utc)
                 )
 
             except Exception as e:
                 logger.error(f"Error discovering stream for channel {channel_id}: {e}")
                 return None
+
+    async def fetch_video_start_time(self, video_id: str) -> datetime | None:
+        """Fetches YouTube watch page HTML to extract the actual stream start time."""
+        url = f"https://www.youtube.com/watch?v={video_id}"
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout, headers=self.headers, follow_redirects=True) as client:
+                resp = await client.get(url)
+                if resp.status_code == 200:
+                    return extract_stream_start_time(resp.text)
+        except Exception as e:
+            logger.warning(f"Could not fetch stream start time for {video_id}: {e}")
+        return None

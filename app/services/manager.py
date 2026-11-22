@@ -16,8 +16,9 @@ from app.models.db import (
     WindowStatsModel,
     StreamModel,
 )
-from app.services.ingestion import ChatIngestionService
 from app.services.analytics import SlidingWindowAnalytics
+from app.services.discovery import StreamDiscoveryService
+from app.services.ingestion import ChatIngestionService
 from app.services.merger import PeakMerger
 from app.services.notification import notification_service
 from app.services.notifier import send_peak_webhook
@@ -257,21 +258,23 @@ class StreamManager:
     Central manager service controlling background worker tasks across multiple live streams.
     """
 
-    def __init__(self):
+    def __init__(self, discovery_service: StreamDiscoveryService | None = None):
         self.active_workers: dict[str, ActiveStreamWorker] = {}
+        self.discovery_service = discovery_service or StreamDiscoveryService()
 
     async def _upsert_stream(
         self,
         video_id: str,
         channel_id: str | None = None,
-        title: str | None = None
+        title: str | None = None,
+        started_at: datetime | None = None,
     ) -> datetime:
         """Creates or refreshes stream metadata before monitoring starts."""
         now = datetime.now(timezone.utc)
         async with async_session_factory() as session:
             stream = await session.get(StreamModel, video_id)
             if stream is None:
-                stream_start = now
+                stream_start = started_at or now
                 session.add(StreamModel(
                     video_id=video_id,
                     channel_id=channel_id or "unknown",
@@ -282,7 +285,9 @@ class StreamManager:
                 ))
             else:
                 stream.is_live = True
-                if not stream.started_at:
+                if started_at is not None:
+                    stream.started_at = started_at
+                elif not stream.started_at:
                     stream.started_at = now
                 stream_start = stream.started_at
                 stream.ended_at = None
@@ -306,14 +311,23 @@ class StreamManager:
         self,
         video_id: str,
         channel_id: str | None = None,
-        title: str | None = None
+        title: str | None = None,
+        started_at: datetime | None = None,
     ) -> bool:
         """Starts background pipeline worker for target video_id."""
         if video_id in self.active_workers:
             logger.warning(f"Stream {video_id} is already being monitored.")
             return False
 
-        stream_start = await self._upsert_stream(video_id, channel_id=channel_id, title=title)
+        if started_at is None:
+            started_at = await self.discovery_service.fetch_video_start_time(video_id)
+
+        stream_start = await self._upsert_stream(
+            video_id,
+            channel_id=channel_id,
+            title=title,
+            started_at=started_at,
+        )
 
         worker = ActiveStreamWorker(video_id=video_id, started_at=stream_start)
         worker.ingestion = ChatIngestionService(

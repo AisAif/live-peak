@@ -155,7 +155,8 @@ class AutoChannelTracker:
             await stream_manager.start_monitoring_stream(
                 video_id,
                 channel_id=channel_id,
-                title=stream_info.title
+                title=stream_info.title,
+                started_at=stream_info.started_at,
             )
 
 

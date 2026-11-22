@@ -60,7 +60,7 @@ class Settings(BaseSettings):
     # Peak Merging & Time Padding Parameters
     PEAK_MERGE_GAP_SECONDS: int = 30  # Merge peaks if distance <= 30 seconds
     PEAK_HYSTERESIS_LOW_Z: float = 1.2  # Lower Z-score bound to keep active peak open
-    PEAK_PADDING_BEFORE_SECONDS: int = 15  # Pre-peak video clip offset
+    PEAK_PADDING_BEFORE_SECONDS: int = 25  # Pre-peak video clip offset (covers reaction lag & stream delay)
     PEAK_PADDING_AFTER_SECONDS: int = 15  # Post-peak video clip offset
 
     model_config = SettingsConfigDict(

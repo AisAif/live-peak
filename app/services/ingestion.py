@@ -344,12 +344,30 @@ class ChatIngestionService:
                 ) or "Unknown"
                 money_info = item.get("money")
                 amount_str = money_info.get("text") if isinstance(money_info, dict) else None
+
+                ts = datetime.now(timezone.utc)
+                raw_ts = item.get("timestamp")
+                if raw_ts:
+                    try:
+                        if isinstance(raw_ts, (int, float)):
+                            if raw_ts > 1e14:
+                                raw_ts = raw_ts / 1_000_000.0
+                            elif raw_ts > 1e11:
+                                raw_ts = raw_ts / 1_000.0
+                            ts = datetime.fromtimestamp(float(raw_ts), tz=timezone.utc)
+                        elif isinstance(raw_ts, str):
+                            ts = datetime.fromisoformat(raw_ts.replace("Z", "+00:00"))
+                            if ts.tzinfo is None:
+                                ts = ts.replace(tzinfo=timezone.utc)
+                    except (ValueError, TypeError, OSError):
+                        pass
+
                 chat_msg = ChatMessage(
                     video_id=self.video_id,
                     message_id=message_id,
                     author_name=author_name,
                     message=item.get("message") or "",
-                    timestamp=datetime.now(timezone.utc),
+                    timestamp=ts,
                     amount_str=amount_str,
                 )
                 if self.message_callback:
@@ -437,12 +455,20 @@ class ChatIngestionService:
                         if not self._is_new_message(message_id):
                             continue
 
+                        ts = datetime.now(timezone.utc)
+                        raw_ts = getattr(item, "timestamp", None)
+                        if raw_ts:
+                            try:
+                                ts = datetime.fromtimestamp(float(raw_ts) / 1000.0, tz=timezone.utc)
+                            except (ValueError, TypeError, OSError):
+                                pass
+
                         chat_msg = ChatMessage(
                             video_id=self.video_id,
                             message_id=message_id,
                             author_name=item.author.name,
                             message=item.message,
-                            timestamp=datetime.now(timezone.utc),
+                            timestamp=ts,
                             amount_str=item.amountString if hasattr(item, "amountString") else None
                         )
 

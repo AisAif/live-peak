@@ -128,13 +128,19 @@ async def test_falls_back_to_chat_downloader_when_pytchat_fails(monkeypatch):
 
     class FakeDownloader:
         def get_chat(self, url):
-            yield {"message_id": "c1", "author": {"name": "alice"}, "message": "GILA CLUTCH!"}
+            yield {
+                "message_id": "c1",
+                "author": {"name": "alice"},
+                "message": "GILA CLUTCH!",
+                "timestamp": 1700000000000000,
+            }
             yield {"message_id": "c1", "author": {"name": "alice"}, "message": "duplicate"}
             yield {
                 "message_id": "c2",
                 "author": {"name": "bob"},
                 "message": "gg",
                 "money": {"text": "IDR 50,000"},
+                "timestamp": 1700000005000000,
             }
 
     monkeypatch.setattr(ingestion_module.pytchat, "create", failing_pytchat)
@@ -145,8 +151,10 @@ async def test_falls_back_to_chat_downloader_when_pytchat_fails(monkeypatch):
     assert len(received) == 2
     assert received[0].author_name == "alice"
     assert received[0].message == "GILA CLUTCH!"
+    assert int(received[0].timestamp.timestamp()) == 1700000000
     assert received[1].author_name == "bob"
     assert received[1].amount_str == "IDR 50,000"
+    assert int(received[1].timestamp.timestamp()) == 1700000005
 
 
 @pytest.mark.asyncio

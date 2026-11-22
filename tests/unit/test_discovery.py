@@ -103,3 +103,39 @@ async def test_discover_accepts_valid_live_stream_for_matching_channel(monkeypat
     assert result.channel_id == channel_a
     assert result.title == "Channel A Live"
     assert result.is_live is True
+
+
+def test_extract_stream_start_time_patterns():
+    from app.services.discovery import extract_stream_start_time
+    from datetime import datetime, timezone
+
+    html1 = 'var ytInitialPlayerResponse = {"microformat":{"playerMicroformatRenderer":{"liveBroadcastDetails":{"isLiveNow":true,"startTimestamp":"2026-11-22T10:15:30Z"}}}};'
+    t1 = extract_stream_start_time(html1)
+    assert t1 == datetime(2026, 11, 22, 10, 15, 30, tzinfo=timezone.utc)
+
+    html2 = '"actualStartTime":"2026-11-22T12:00:00+00:00"'
+    t2 = extract_stream_start_time(html2)
+    assert t2 == datetime(2026, 11, 22, 12, 0, 0, tzinfo=timezone.utc)
+
+    html3 = '<meta itemprop="startDate" content="2026-11-22T14:30:00+07:00">'
+    t3 = extract_stream_start_time(html3)
+    assert t3 is not None
+    # Converted to UTC
+    assert t3 == datetime(2026, 11, 22, 7, 30, 0, tzinfo=timezone.utc)
+
+    assert extract_stream_start_time("<html>no start time</html>") is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_video_start_time(monkeypatch):
+    from datetime import datetime, timezone
+
+    html = '"startTimestamp":"2026-11-22T08:00:00Z"'
+    monkeypatch.setattr(
+        discovery_module.httpx,
+        "AsyncClient",
+        _mock_async_client(html, "https://www.youtube.com/watch?v=TESTVID1"),
+    )
+    service = StreamDiscoveryService()
+    t = await service.fetch_video_start_time("TESTVID1")
+    assert t == datetime(2026, 11, 22, 8, 0, 0, tzinfo=timezone.utc)
